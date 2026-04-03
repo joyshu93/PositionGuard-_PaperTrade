@@ -1,0 +1,7 @@
+export const PAPER_INITIAL_CASH_KRW = 1_000_000;
+export const PAPER_FEE_RATE = 0.0005;
+export const PAPER_SLIPPAGE_RATE = 0.0003;
+export const PAPER_MIN_TRADE_VALUE_KRW = 10_000;
+export const PAPER_ENTRY_ALLOCATION = 0.25;
+export const PAPER_ADD_ALLOCATION = 0.15;
+export const PAPER_REDUCE_FRACTION = 0.33;

@@ -1,0 +1,134 @@
+# PositionGuard PaperTrade
+
+PositionGuard PaperTrade is a Telegram-based automatic paper-trading bot for `KRW-BTC` and `KRW-ETH` only.
+
+It uses public Upbit quotation and candle data, applies deterministic rule-based logic, simulates fills internally, persists paper account state in D1, and sends Telegram execution reports.
+
+It does not place real orders.
+
+## Product Boundary
+
+This project is:
+
+- a Cloudflare Workers + D1 modular monolith
+- a Telegram webhook bot
+- a public Upbit market-data consumer
+- a rule-based BTC/ETH spot paper-trading engine
+- an internal simulated execution and reporting system
+
+This project is not:
+
+- a real trading bot
+- an authenticated exchange integration
+- a place to store exchange API keys
+- a private Upbit account sync
+- a live balance mirror
+- an LLM-driven trade caller
+
+## Current Vertical Slice
+
+The first paper-trading iteration includes:
+
+- hourly scheduled evaluation for `BTC` and `ETH`
+- deterministic actions: `HOLD`, `ENTRY`, `ADD`, `REDUCE`, `EXIT`
+- simulated fee and slippage assumptions in code constants
+- internal paper fills only
+- D1 persistence for accounts, positions, trades, equity snapshots, and strategy decisions
+- Telegram read surfaces:
+  - `/status`
+  - `/pnl`
+  - `/history`
+- Telegram execution summaries for simulated fills
+
+## Architecture
+
+- `src/index.ts`
+  - Worker entrypoint, health route, webhook route, dependency wiring
+- `src/hourly.ts`
+  - hourly automatic paper-trading loop
+- `src/upbit.ts`
+  - public Upbit quotation and candle normalization
+- `src/paper/*`
+  - rule-based decision logic, execution math, reporting helpers
+- `src/db/*`
+  - D1 repositories and typed persistence helpers
+- `src/telegram/*`
+  - Telegram command routing and client wiring
+- `migrations/`
+  - additive D1 migrations
+
+## Persistence
+
+Paper-trading state is stored in D1 with these tables:
+
+- `paper_accounts`
+- `paper_positions`
+- `paper_trades`
+- `equity_snapshots`
+- `strategy_decisions`
+
+Legacy scaffold tables remain present because this iteration was built additively from the original PositionGuard scaffold.
+
+## Scheduled Flow
+
+On each hourly run:
+
+1. load registered Telegram users
+2. ensure a paper account exists
+3. fetch Upbit market snapshots for `KRW-BTC` and `KRW-ETH`
+4. build deterministic decision context
+5. run rule-based paper-trading decision logic
+6. simulate fills internally when action is required
+7. persist account, position, trade, equity, and strategy decision state
+8. send Telegram execution summaries for simulated fills
+
+## Telegram Commands
+
+- `/start`
+- `/help`
+- `/status`
+- `/pnl`
+- `/history`
+- `/language <ko|en>`
+- `/sleep on`
+- `/sleep off`
+
+The previous manual `/setcash` and `/setposition` workflow is intentionally not used in this paper-trading version.
+
+## Explicit Assumptions
+
+Paper execution assumptions are explicit code constants in `src/paper/constants.ts`:
+
+- initial paper cash
+- fee rate
+- slippage rate
+- minimum trade value
+- entry allocation
+- add allocation
+- reduce fraction
+
+## Local Setup
+
+1. Install dependencies with `npm install`.
+2. Create a D1 database and update `wrangler.toml`.
+3. Apply migrations.
+4. Set Telegram secrets.
+5. Run typecheck, build, and tests.
+
+Useful commands:
+
+- `npm run typecheck`
+- `npm run build`
+- `npm run test`
+- `npm run check`
+- `npm run dev`
+
+## Intentional Non-Goals In This Iteration
+
+- no real exchange order placement
+- no authenticated private API access
+- no live balance sync
+- no leverage
+- no assets beyond BTC and ETH
+- no opaque scoring model
+- no discretionary AI judgment

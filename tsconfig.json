@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "WebWorker"],
+    "types": ["@cloudflare/workers-types"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "useDefineForClassFields": true,
+    "outDir": "dist"
+  },
+  "include": [
+    "src/**/*.ts",
+    "tests/paper-trading.test.ts",
+    "tests/telegram-paper.test.ts",
+    "tests/upbit.normalization.test.ts",
+    "tests/runtime-config.test.ts",
+    "tests/test-helpers.ts"
+  ],
+  "exclude": ["dist", "node_modules"]
+}

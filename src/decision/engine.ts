@@ -1,0 +1,471 @@
+import type {
+  DecisionContext,
+  DecisionDiagnostics,
+  DecisionResult,
+  DecisionRiskLevel,
+  DecisionSetupState,
+  MarketRegime,
+} from "../domain/types.js";
+import {
+  analyzeMarketStructure,
+  analyzePositionStructure,
+  summarizeLocation,
+  toDecisionSnapshot,
+  type MarketStructureAnalysis,
+  type PositionStructureAnalysis,
+} from "./market-structure.js";
+import { localizeNoExecution, resolveUserLocale } from "../i18n/index.js";
+
+type SetupKind = "ENTRY" | "ADD_BUY" | "REDUCE" | "NONE";
+type BullishPath = "PULLBACK_ENTRY" | "RECLAIM_ENTRY" | "PULLBACK_ADD" | "STRENGTH_ADD" | null;
+type InvalidationMode = "PULLBACK" | "RECLAIM" | "REDUCE";
+type SetupBlockerCode =
+  | "NO_CASH"
+  | "BREAKDOWN_RISK"
+  | "WEAK_DOWNTREND"
+  | "UPPER_RANGE_CHASE"
+  | "NO_VALID_PATH"
+  | "INVALIDATION_UNCLEAR"
+  | "EMA_RECOVERY_INCOMPLETE"
+  | "LOSS_TOO_DEEP"
+  | "ATR_SHOCK"
+  | "FOUR_HOUR_SUPPORT_WEAKENING";
+type SetupBlockerSeverity = "HARD" | "SOFT";
+
+interface SetupEval { kind: SetupKind; state: DecisionSetupState; supports: string[]; blockers: string[]; }
+interface TriggerEval { state: DecisionDiagnostics["trigger"]["state"]; confirmed: string[]; missing: string[]; }
+interface RiskEval { level: DecisionRiskLevel; invalidationState: DecisionDiagnostics["risk"]["invalidationState"]; invalidationLevel: number | null; notes: string[]; }
+interface SetupBlocker { code: SetupBlockerCode; severity: SetupBlockerSeverity; message: string; }
+
+export function runDecisionEngine(context: DecisionContext): DecisionResult {
+  if (!context.setup.isReady) return baseResult(context, "SETUP_INCOMPLETE", "Manual setup is incomplete; waiting for user-reported inputs.", [`Missing setup items: ${context.setup.missingItems.join(", ")}.`, "PositionGuard only works from user-reported state."], false);
+  if (!context.marketSnapshot) return baseResult(context, "INSUFFICIENT_DATA", "Public market context is unavailable for this cycle.", ["The decision scaffold requires a normalized market snapshot.", "No fallback strategy logic is enabled in the MVP."], false);
+
+  const hasCash = (context.accountState?.availableCash ?? 0) > 0;
+  const hasPosition = Boolean(context.positionState && context.positionState.quantity > 0);
+  if (!hasPosition) return evaluateEntry(context, analyzeMarketStructure(context.marketSnapshot), hasCash);
+
+  const analysis = analyzePositionStructure(context.marketSnapshot, context.positionState?.averageEntryPrice ?? 0);
+  const reduce = evaluateReduce(context, analysis);
+  if (reduce.status === "ACTION_NEEDED") return reduce;
+  return evaluateAddBuy(context, analysis, hasCash);
+}
+
+function evaluateEntry(context: DecisionContext, analysis: MarketStructureAnalysis, hasCash: boolean): DecisionResult {
+  const locale = resolveUserLocale(context.user.locale ?? null);
+  const path = getBullishPath(analysis, false);
+  const setup = assessEntrySetup(analysis, hasCash, path);
+  const trigger = assessBullishTrigger(analysis, path);
+  const risk = assessRisk(analysis, analysis.riskLevel, getInvalidationMode(path));
+  const diagnostics = buildDiagnostics(analysis, setup, trigger, risk);
+  if (setup.state === "READY" && trigger.state === "CONFIRMED") {
+    const continuation = path === "RECLAIM_ENTRY";
+    const summary = continuation
+      ? locale === "ko"
+        ? `${analysis.asset} 리클레임 구조가 보수적인 현물 진입 검토에 적합합니다.`
+        : `${analysis.asset} reclaim structure supports a conservative spot entry review.`
+      : locale === "ko"
+        ? `${analysis.asset} 눌림 구조가 보수적인 현물 진입 검토에 적합합니다.`
+        : `${analysis.asset} pullback structure supports a conservative spot entry review.`;
+    return withAlert(context, diagnostics, "ENTRY_REVIEW_REQUIRED", `entry-review:${context.user.id}:${analysis.asset}:${bucketEntry(analysis, path)}`, summary, buildEntryReasons(analysis, context, setup, trigger, risk, path), [
+      locale === "ko" ? `조치 필요: ${summary}` : `Action needed: ${summary}`,
+      continuation
+        ? locale === "ko"
+          ? "분할 전제는 유지하고, 먼저 무효화 기준을 확인한 뒤 리클레임이 유지될 때만 유효하다고 보세요."
+          : "Keep it staged, confirm the invalidation level first, and only treat it as valid while the reclaim keeps holding."
+        : locale === "ko"
+          ? "분할 전제는 유지하고, 먼저 무효화 기준을 확인한 뒤 상단 추격은 피하세요."
+          : "Keep it staged, confirm the invalidation level first, and avoid chasing the upper end of the range.",
+      localizeNoExecution(locale),
+    ].join("\n"));
+  }
+  return {
+    ...baseResult(context, "NO_ACTION", entryNoActionSummary(locale, analysis, hasCash, setup, trigger, path), entryNoActionReasons(analysis, hasCash, setup, trigger, risk, path), false),
+    symbol: context.marketSnapshot?.market ?? null,
+    diagnostics,
+  };
+}
+
+function evaluateAddBuy(context: DecisionContext, analysis: PositionStructureAnalysis, hasCash: boolean): DecisionResult {
+  const locale = resolveUserLocale(context.user.locale ?? null);
+  const path = getBullishPath(analysis, true);
+  const setup = assessAddBuySetup(analysis, hasCash, path);
+  const trigger = assessBullishTrigger(analysis, path);
+  const risk = assessRisk(analysis, analysis.riskLevel === "LOW" && analysis.pnlPct > -0.03 ? "MODERATE" : analysis.riskLevel, getInvalidationMode(path));
+  const diagnostics = buildDiagnostics(analysis, setup, trigger, risk);
+  if (setup.state === "READY" && trigger.state === "CONFIRMED") {
+    const strengthAdd = path === "STRENGTH_ADD";
+    const summary = strengthAdd
+      ? locale === "ko"
+        ? `${analysis.asset} 유효한 리클레임 강세가 분할 추가매수 검토를 정당화할 수 있습니다.`
+        : `${analysis.asset} valid reclaim strength may justify a staged add-buy review.`
+      : locale === "ko"
+        ? `${analysis.asset} 눌림 구조가 분할 추가매수 검토를 정당화할 수 있습니다.`
+        : `${analysis.asset} pullback may justify a staged add-buy review.`;
+    return withAlert(context, diagnostics, "ADD_BUY_REVIEW_REQUIRED", `add-buy-review:${context.user.id}:${analysis.asset}:${bucketAdd(analysis, path)}`, summary, buildAddBuyReasons(analysis, context, setup, trigger, risk, path), [
+      locale === "ko" ? `조치 필요: ${summary}` : `Action needed: ${summary}`,
+      strengthAdd
+        ? locale === "ko"
+          ? "리클레임이 계속 유지되고 무효화 기준이 분명하며 추가가 분할 전제일 때만 검토하세요."
+          : "Only consider it if the reclaim still holds, the invalidation level is clear, and the add remains staged."
+        : locale === "ko"
+          ? "무효화 기준이 분명하고 현금이 남아 있으며 붕괴 구간으로 평균단가를 낮추는 상황이 아닐 때만 검토하세요."
+          : "Only consider it if the invalidation level is clear, cash remains available, and you are not averaging into breakdown.",
+      localizeNoExecution(locale),
+    ].join("\n"));
+  }
+  return {
+    ...baseResult(context, "NO_ACTION", addNoActionSummary(locale, analysis, hasCash, setup, trigger, path), addNoActionReasons(analysis, hasCash, setup, trigger, risk, path), false),
+    symbol: context.marketSnapshot?.market ?? null,
+    diagnostics,
+  };
+}
+
+function evaluateReduce(context: DecisionContext, analysis: PositionStructureAnalysis): DecisionResult {
+  const locale = resolveUserLocale(context.user.locale ?? null);
+  const setup = assessReduceSetup(analysis);
+  const trigger = assessReduceTrigger(analysis);
+  const risk = assessRisk(analysis, analysis.riskLevel === "LOW" ? "ELEVATED" : analysis.riskLevel, "REDUCE");
+  const diagnostics = buildDiagnostics(analysis, setup, trigger, risk);
+  const actionable = setup.state === "READY" && (trigger.state === "BEARISH_CONFIRMATION" || risk.level === "HIGH");
+  if (!actionable) {
+    return {
+      ...baseResult(context, "NO_ACTION", locale === "ko" ? `${analysis.asset} 구조가 혼재돼 있어, 보수적으로는 관찰을 유지하고 무효화 기준을 분명히 두는 편이 낫습니다.` : `${analysis.asset} structure is mixed, so the conservative posture is to observe and keep invalidation levels explicit.`, [formatPnL(analysis), `Regime: ${regimeText(analysis.regime)}.`, rangeText(analysis), invalidationText(risk), "Survival first remains the frame, but a reduce review is not forced yet."], false),
+      symbol: context.marketSnapshot?.market ?? null,
+      diagnostics,
+    };
+  }
+  const summary = analysis.breakdown1d || risk.level === "HIGH"
+    ? locale === "ko"
+      ? `${analysis.asset} 구조가 상위 시간대 지지를 잃었습니다. 매도 측 리스크 관리를 검토하세요.`
+      : `${analysis.asset} structure has lost higher-timeframe support; review sell-side risk management.`
+    : locale === "ko"
+      ? `${analysis.asset} 구조가 약해지고 있습니다. 부분 축소 또는 이탈 계획을 검토하세요.`
+      : `${analysis.asset} structure is weakening; review partial reduction or exit plan.`;
+  return withAlert(context, diagnostics, "REDUCE_REVIEW_REQUIRED", `reduce-review:${context.user.id}:${analysis.asset}:${bucketReduce(analysis)}`, summary, [formatPnL(analysis), `Regime: ${regimeText(analysis.regime)}.`, rangeText(analysis), invalidationText(risk), `What broke: ${setup.supports[0] ?? "higher timeframe support is weakening"}.`, `Trigger: ${trigger.confirmed[0] ?? trigger.missing[0] ?? "bearish confirmation is building"}.`, "Survival first: review reduce-side risk, sell review, or exit plan review before hoping for recovery."], [
+    locale === "ko" ? `조치 필요: ${summary}` : `Action needed: ${summary}`,
+    locale === "ko"
+      ? "무효화 기준, 현금 리스크 노출, 그리고 지금 축소 검토나 이탈 계획 검토가 필요한지 다시 확인하세요."
+      : "Review the invalidation level, cash-risk posture, and whether a reduce review or exit plan review is now required.",
+    localizeNoExecution(locale),
+  ].join("\n"));
+}
+
+function assessEntrySetup(analysis: MarketStructureAnalysis, hasCash: boolean, path: BullishPath): SetupEval {
+  const supports: string[] = [];
+  const blockers: SetupBlocker[] = [];
+  if (!hasCash) blockers.push(hardBlocker("NO_CASH", "No available cash is recorded for a staged spot review.")); else supports.push("Available cash is recorded for a staged spot review.");
+  if (analysis.regime === "BREAKDOWN_RISK") blockers.push(hardBlocker("BREAKDOWN_RISK", "Daily structure is in breakdown risk."));
+  else if (analysis.regime === "WEAK_DOWNTREND") blockers.push(hardBlocker("WEAK_DOWNTREND", "Higher timeframe structure is still weak enough that a new entry review is not justified."));
+  else supports.push(`Regime is ${regimeText(analysis.regime)}.`);
+  if (analysis.upperRangeChase) {
+    blockers.push(softBlocker("UPPER_RANGE_CHASE", "Current price is already too extended in the upper part of the recent range."));
+    if (path === "RECLAIM_ENTRY") supports.push("Continuation structure is good enough that late-extension risk is treated as a soft caution, not an automatic disqualification.");
+  } else supports.push(path === "RECLAIM_ENTRY" ? "Continuation structure is good enough that the no-chase filter is not automatically disqualifying it." : "No chase condition is present.");
+  if (path === "PULLBACK_ENTRY") supports.push("Current location offers a pullback-style entry path.");
+  else if (path === "RECLAIM_ENTRY") supports.push("Current location offers a reclaim or breakout-hold entry path.");
+  else blockers.push(hardBlocker("NO_VALID_PATH", "Current location does not yet offer a clear pullback or reclaim structure."));
+  if (getModeInvalidationState(analysis, getInvalidationMode(path)) === "CLEAR") supports.push(path === "RECLAIM_ENTRY" ? "Invalidation is clear from the reclaimed level holding." : "Invalidation remains explainable from recent 4h and daily support."); else blockers.push(hardBlocker("INVALIDATION_UNCLEAR", "Invalidation is not clear enough yet."));
+  if (analysis.timeframes["4h"].emaStackBullish || analysis.timeframes["1d"].emaStackBullish || analysis.regime === "EARLY_RECOVERY" || analysis.regime === "RECLAIM_ATTEMPT") supports.push("Higher timeframe structure is constructive enough for a conservative review."); else blockers.push(softBlocker("EMA_RECOVERY_INCOMPLETE", "EMA recovery is still incomplete."));
+  if ((analysis.timeframes["1h"].indicators.volumeRatio ?? 0) >= 0.75) supports.push("Recent volume is not completely absent.");
+  return { kind: "ENTRY", state: setupState(supports, blockers, path, analysis), supports, blockers: blockers.map((blocker) => blocker.message) };
+}
+
+function assessAddBuySetup(analysis: PositionStructureAnalysis, hasCash: boolean, path: BullishPath): SetupEval {
+  const supports: string[] = [];
+  const blockers: SetupBlocker[] = [];
+  if (!hasCash) blockers.push(hardBlocker("NO_CASH", "No available cash is recorded for a staged add-buy review.")); else supports.push("Available cash remains on record for a staged add-buy review.");
+  if (analysis.regime === "BREAKDOWN_RISK") blockers.push(hardBlocker("BREAKDOWN_RISK", "Higher timeframe structure is already in breakdown risk."));
+  else if (analysis.regime === "WEAK_DOWNTREND" && path !== "STRENGTH_ADD") blockers.push(hardBlocker("WEAK_DOWNTREND", "Higher timeframe structure is still weak enough that averaging is not conservative."));
+  else supports.push(`Regime is ${regimeText(analysis.regime)}.`);
+  if (analysis.upperRangeChase) {
+    blockers.push(softBlocker("UPPER_RANGE_CHASE", "Current price is too high inside the recent range for a staged add-buy review."));
+    if (path === "STRENGTH_ADD") supports.push("Reclaim strength is good enough that late-extension risk is treated as a soft caution here, not an automatic disqualification.");
+  } else supports.push(path === "STRENGTH_ADD" ? "Reclaim strength is good enough that the no-chase filter is narrower here." : "No chase condition is present.");
+  if (path === "PULLBACK_ADD") supports.push("Current location still looks like a pullback area.");
+  else if (path === "STRENGTH_ADD") supports.push("Current location supports a strength add only after a valid reclaim.");
+  else blockers.push(hardBlocker("NO_VALID_PATH", "Current location does not look like a healthy pullback or reclaim."));
+  if (analysis.pnlPct <= -0.09) blockers.push(hardBlocker("LOSS_TOO_DEEP", "Loss is already too deep for conservative averaging.")); else supports.push("Loss depth is still inside a staged review zone.");
+  if (analysis.atrShock) blockers.push(hardBlocker("ATR_SHOCK", "Recent move still looks too aggressive relative to ATR."));
+  if ((analysis.timeframes["1h"].indicators.volumeRatio ?? 0) >= 0.7) supports.push("Volume has not fully disappeared.");
+  if (analysis.timeframes["4h"].emaStackBullish || analysis.currentPrice >= (analysis.timeframes["4h"].indicators.ema50 ?? analysis.currentPrice)) supports.push("4h EMA20/EMA50 support is still explainable."); else blockers.push(hardBlocker("FOUR_HOUR_SUPPORT_WEAKENING", "4h EMA support is weakening too much."));
+  if (getModeInvalidationState(analysis, getInvalidationMode(path)) === "CLEAR") supports.push(path === "STRENGTH_ADD" ? "Strength-add invalidation is clear from the reclaimed level." : "Add-buy invalidation remains explainable.");
+  else blockers.push(hardBlocker("INVALIDATION_UNCLEAR", "Invalidation is not clear enough for a staged add-buy review."));
+  return { kind: "ADD_BUY", state: setupState(supports, blockers, path, analysis), supports, blockers: blockers.map((blocker) => blocker.message) };
+}
+
+function assessReduceSetup(analysis: PositionStructureAnalysis): SetupEval {
+  const supports: string[] = [];
+  const structureDamage: string[] = [];
+  const weaknessSignals: string[] = [];
+  if (analysis.breakdown4h || analysis.breakdown1d) structureDamage.push("Recent support has already been lost.");
+  if (analysis.failedReclaim) structureDamage.push("Recent reclaim attempts have already failed.");
+  if (analysis.timeframes["4h"].trend === "DOWN" || analysis.timeframes["1d"].trend === "DOWN") weaknessSignals.push("Higher timeframe structure is weakening.");
+  if (analysis.pnlPct <= -0.06) weaknessSignals.push("Recorded drawdown is expanding.");
+  if (analysis.currentPrice < (analysis.timeframes["4h"].indicators.ema50 ?? analysis.currentPrice) && analysis.currentPrice < (analysis.timeframes["1d"].indicators.ema200 ?? analysis.currentPrice)) weaknessSignals.push("EMA50/EMA200 support is not holding cleanly.");
+  supports.push(...structureDamage, ...weaknessSignals);
+  const state = structureDamage.length >= 1 && weaknessSignals.length >= 1 ? "READY" : supports.length > 0 ? "PROMISING" : "NOT_APPLICABLE";
+  return { kind: "REDUCE", state, supports, blockers: [] };
+}
+
+function assessBullishTrigger(analysis: MarketStructureAnalysis | PositionStructureAnalysis, path: BullishPath): TriggerEval {
+  const confirmed: string[] = [];
+  const missing: string[] = [];
+  if (path === "RECLAIM_ENTRY" || path === "STRENGTH_ADD") {
+    if (analysis.reclaimStructure) confirmed.push("Recent reclaim is visible above prior resistance.");
+    else missing.push("Reclaim above prior resistance is still missing.");
+    if (analysis.breakoutHoldStructure) confirmed.push("The breakout-hold is still being maintained.");
+    else missing.push("The breakout-hold still needs to prove it can hold.");
+    if (analysis.macdImproving) confirmed.push("Momentum is still improving through the reclaim.");
+    else if (!hasStrongReclaimActionQuality(analysis)) missing.push("Momentum through the reclaim is still incomplete.");
+    if (analysis.volumeRecovery) confirmed.push("Recent volume has recovered enough to support continuation.");
+    else if (hasStrongReclaimActionQuality(analysis)) confirmed.push("Structure quality is strong enough that exceptional continuation volume is not mandatory.");
+    else missing.push("Continuation volume is still weak.");
+  } else if (path === "PULLBACK_ENTRY" || path === "PULLBACK_ADD") {
+    if (analysis.pullbackZone) confirmed.push("Pullback location is still constructive.");
+    else missing.push("Pullback location is still missing.");
+    if (analysis.macdImproving) confirmed.push("MACD histogram is improving into the retest.");
+    else missing.push("MACD histogram improvement is still missing.");
+    if (analysis.rsiRecovery) confirmed.push("RSI has moved away from washed-out extremes.");
+    else missing.push("RSI recovery is not clear yet.");
+  } else {
+    missing.push("A valid pullback or reclaim path is still missing.");
+  }
+  if (analysis.timeframes["1h"].rsiOverbought && analysis.upperRangeChase && path !== "RECLAIM_ENTRY" && path !== "STRENGTH_ADD") missing.push("RSI is still overheated for a conservative review.");
+  return { state: isBullishTriggerConfirmed(analysis, path, confirmed) ? "CONFIRMED" : "PENDING", confirmed, missing };
+}
+
+function assessReduceTrigger(analysis: PositionStructureAnalysis): TriggerEval {
+  const confirmed: string[] = [];
+  const missing: string[] = [];
+  const structureDamageConfirmed = analysis.breakdown4h || analysis.breakdown1d || analysis.failedReclaim;
+  const weaknessConfirmed: string[] = [];
+  if (analysis.breakdown4h || analysis.breakdown1d) confirmed.push("Swing support has already broken.");
+  if (analysis.failedReclaim) confirmed.push("Recent reclaim attempts have already failed.");
+  if (analysis.bearishMomentumExpansion) weaknessConfirmed.push("MACD is expanding negatively across the pullback.");
+  if ((analysis.timeframes["1h"].indicators.rsi14 ?? 100) <= 38 && analysis.timeframes["4h"].trend === "DOWN") weaknessConfirmed.push("RSI is staying weak instead of rebounding.");
+  if (analysis.atrShock) weaknessConfirmed.push("Price damage is large relative to ATR.");
+  confirmed.push(...weaknessConfirmed);
+  if (!structureDamageConfirmed) missing.push("Structure damage is not confirmed yet.");
+  if (weaknessConfirmed.length === 0) missing.push("Secondary weakness confirmation is still too thin.");
+  return { state: structureDamageConfirmed && weaknessConfirmed.length >= 1 ? "BEARISH_CONFIRMATION" : "PENDING", confirmed, missing };
+}
+
+function assessRisk(
+  analysis: MarketStructureAnalysis | PositionStructureAnalysis,
+  level: DecisionRiskLevel,
+  mode: InvalidationMode,
+): RiskEval {
+  const invalidationLevel = getModeInvalidationLevel(analysis, mode);
+  const invalidationState = getModeInvalidationState(analysis, mode);
+  return {
+    level,
+    invalidationState,
+    invalidationLevel,
+    notes: [
+      formatInvalidationLevelFromMode(invalidationLevel, invalidationState),
+      ...(analysis.breakdown1d ? ["Daily support is already broken."] : analysis.breakdown4h ? ["4h support is already broken."] : analysis.failedReclaim ? ["Recent reclaim attempts have failed."] : []),
+    ],
+  };
+}
+
+function buildDiagnostics(analysis: MarketStructureAnalysis | PositionStructureAnalysis, setup: SetupEval, trigger: TriggerEval, risk: RiskEval): DecisionDiagnostics {
+  return {
+    regime: { classification: analysis.regime, summary: analysis.regimeSummary },
+    setup: { kind: setup.kind, state: setup.state, supports: setup.supports, blockers: setup.blockers },
+    trigger: { state: trigger.state, confirmed: trigger.confirmed, missing: trigger.missing },
+    risk: { level: risk.level, invalidationState: risk.invalidationState, invalidationLevel: risk.invalidationLevel, notes: risk.notes },
+    indicators: { price: analysis.currentPrice, timeframes: { "1h": toDecisionSnapshot(analysis.timeframes["1h"]), "4h": toDecisionSnapshot(analysis.timeframes["4h"]), "1d": toDecisionSnapshot(analysis.timeframes["1d"]) } },
+  };
+}
+
+function buildEntryReasons(analysis: MarketStructureAnalysis, context: DecisionContext, setup: SetupEval, trigger: TriggerEval, risk: RiskEval, path: BullishPath): string[] {
+  return [`Available cash on record: ${cash(context)} KRW.`, `Regime: ${regimeText(analysis.regime)}.`, rangeText(analysis), invalidationText(risk), path === "RECLAIM_ENTRY" ? "No chase buying still applies, but a valid reclaim is not treated the same as a late pullback miss." : "No chase buying: current structure is not pressing the upper part of the recent range.", `Setup: ${setup.supports[0] ?? setup.blockers[0] ?? "structure reviewed"}.`, `Trigger: ${trigger.confirmed[0] ?? trigger.missing[0] ?? "trigger reviewed"}.`];
+}
+
+function entryNoActionSummary(locale: "ko" | "en", analysis: MarketStructureAnalysis, hasCash: boolean, setup: SetupEval, trigger: TriggerEval, path: BullishPath): string {
+  if (locale === "ko") {
+    if (!hasCash) return `${analysis.asset} 현물 기록이 없고 새 검토에 쓸 현금 기록도 없습니다.`;
+    if (analysis.regime === "BREAKDOWN_RISK") return `${analysis.asset} 일봉 붕괴 리스크가 있어 지금은 보수적인 진입 검토가 적절하지 않습니다.`;
+    if (analysis.upperRangeChase && path !== "RECLAIM_ENTRY") return `${analysis.asset} 가격이 최근 범위 상단으로 많이 올라 있어 지금은 보수적인 진입 검토가 적절하지 않습니다.`;
+    if (setup.state === "PROMISING" && trigger.state !== "CONFIRMED") return `${analysis.asset} 구조는 나쁘지 않지만 보수적인 진입 검토를 하기에는 트리거가 아직 덜 갖춰졌습니다.`;
+    return `${analysis.asset} 구조가 아직 보수적인 현물 진입 검토를 하기엔 충분히 선명하지 않습니다.`;
+  }
+  if (!hasCash) return `No ${analysis.asset} spot inventory is recorded, and no available cash is on record for a new review.`;
+  if (analysis.regime === "BREAKDOWN_RISK") return `${analysis.asset} has daily breakdown risk, so a conservative entry review is not justified right now.`;
+  if (analysis.upperRangeChase && path !== "RECLAIM_ENTRY") return `${analysis.asset} is still extended inside the recent range, so a conservative entry review is not justified right now.`;
+  if (setup.state === "PROMISING" && trigger.state !== "CONFIRMED") return `${analysis.asset} has a constructive picture, but the trigger is still incomplete for a conservative entry review.`;
+  return `${analysis.asset} structure is not clear enough for a conservative spot entry review yet.`;
+}
+
+function entryNoActionReasons(analysis: MarketStructureAnalysis, hasCash: boolean, setup: SetupEval, trigger: TriggerEval, risk: RiskEval, path: BullishPath): string[] {
+  const reasons = [`Regime: ${regimeText(analysis.regime)}.`, rangeText(analysis), invalidationText(risk)];
+  if (!hasCash) return ["No available cash is recorded, so there is nothing to stage into a new spot position.", ...reasons];
+  if (analysis.upperRangeChase && path !== "RECLAIM_ENTRY") return ["Current price is already in the upper part of the recent range.", ...reasons, "No chase buying remains active."];
+  return [...reasons, `Setup: ${setup.blockers[0] ?? setup.supports[0] ?? "structure reviewed"}.`, `Trigger: ${trigger.missing[0] ?? trigger.confirmed[0] ?? "trigger reviewed"}.`];
+}
+
+function buildAddBuyReasons(analysis: PositionStructureAnalysis, context: DecisionContext, setup: SetupEval, trigger: TriggerEval, risk: RiskEval, path: BullishPath): string[] {
+  return [formatPnL(analysis), `Available cash on record: ${cash(context)} KRW.`, `Regime: ${regimeText(analysis.regime)}.`, rangeText(analysis), invalidationText(risk), path === "STRENGTH_ADD" ? "No chase buying still applies: strength adds are only reviewed after a valid reclaim keeps holding." : "No chase buying still applies: this is a staged add-buy review only when pullback structure holds.", `Setup: ${setup.supports[0] ?? setup.blockers[0] ?? "structure reviewed"}.`, `Trigger: ${trigger.confirmed[0] ?? trigger.missing[0] ?? "trigger reviewed"}.`];
+}
+
+function addNoActionSummary(locale: "ko" | "en", analysis: PositionStructureAnalysis, hasCash: boolean, setup: SetupEval, trigger: TriggerEval, path: BullishPath): string {
+  if (locale === "ko") {
+    if (!hasCash) return `${analysis.asset} 구조가 혼재돼 있고 지금은 분할 추가매수 검토에 쓸 현금 여력 기록도 없습니다.`;
+    if (analysis.upperRangeChase && path !== "STRENGTH_ADD") return `${analysis.asset} 가격이 최근 범위 상단에 너무 높아 지금은 보수적인 추가매수 검토가 적절하지 않습니다.`;
+    if (analysis.regime === "BREAKDOWN_RISK" || (analysis.regime === "WEAK_DOWNTREND" && path !== "STRENGTH_ADD")) return `${analysis.asset} 구조 약화가 커서 분할 추가매수 검토가 보수적이지 않습니다.`;
+    if (setup.state === "PROMISING" && trigger.state !== "CONFIRMED") return `${analysis.asset} 눌림 구조가 완전히 무너지진 않았지만 분할 추가매수 검토를 하기엔 트리거가 아직 덜 갖춰졌습니다.`;
+    return `${analysis.asset} 구조가 혼재돼 있어, 보수적으로는 관찰을 유지하고 무효화 기준을 분명히 두는 편이 낫습니다.`;
+  }
+  if (!hasCash) return `${analysis.asset} structure is mixed, and there is no recorded cash buffer for a staged add-buy review right now.`;
+  if (analysis.upperRangeChase && path !== "STRENGTH_ADD") return `${analysis.asset} is sitting too high in the recent range for a conservative add-buy review right now.`;
+  if (analysis.regime === "BREAKDOWN_RISK" || (analysis.regime === "WEAK_DOWNTREND" && path !== "STRENGTH_ADD")) return `${analysis.asset} is weakening too aggressively for a staged add-buy review.`;
+  if (setup.state === "PROMISING" && trigger.state !== "CONFIRMED") return `${analysis.asset} pullback structure is not broken, but the trigger is still incomplete for a staged add-buy review.`;
+  return `${analysis.asset} structure is mixed, so the conservative posture is to observe and keep invalidation levels explicit.`;
+}
+
+function addNoActionReasons(analysis: PositionStructureAnalysis, hasCash: boolean, setup: SetupEval, trigger: TriggerEval, risk: RiskEval, path: BullishPath): string[] {
+  const reasons = [formatPnL(analysis), `Regime: ${regimeText(analysis.regime)}.`, rangeText(analysis), invalidationText(risk)];
+  if (!hasCash) return [...reasons, "No available cash is recorded, so a staged add-buy review is unavailable."];
+  if (analysis.upperRangeChase && path !== "STRENGTH_ADD") return [...reasons, "Current price is already too extended for a conservative staged add-buy review."];
+  return [...reasons, `Setup: ${setup.blockers[0] ?? setup.supports[0] ?? "structure reviewed"}.`, `Trigger: ${trigger.missing[0] ?? trigger.confirmed[0] ?? "trigger reviewed"}.`];
+}
+
+function withAlert(
+  context: DecisionContext,
+  diagnostics: DecisionDiagnostics,
+  reason: NonNullable<DecisionResult["alert"]>["reason"],
+  cooldownKey: string,
+  summary: string,
+  reasons: string[],
+  message: string,
+): DecisionResult {
+  return {
+    ...baseResult(context, "ACTION_NEEDED", summary, reasons, true),
+    symbol: context.marketSnapshot?.market ?? null,
+    alert: { reason, cooldownKey, message },
+    diagnostics,
+  };
+}
+
+function baseResult(context: DecisionContext, status: DecisionResult["status"], summary: string, reasons: string[], actionable: boolean): DecisionResult {
+  return { status, summary, reasons, actionable, symbol: context.marketSnapshot?.market ?? getFallbackMarket(context), generatedAt: context.generatedAt, alert: null, diagnostics: null };
+}
+
+function cash(context: DecisionContext): string { return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(Math.max(0, context.accountState?.availableCash ?? 0)); }
+function formatPnL(analysis: PositionStructureAnalysis): string { const pct = Math.abs(analysis.pnlPct * 100).toFixed(1); return analysis.pnlPct > 0 ? `Current price is about ${pct}% above the recorded average entry.` : analysis.pnlPct < 0 ? `Current price is about ${pct}% below the recorded average entry.` : "Current price is sitting near the recorded average entry."; }
+function rangeText(analysis: MarketStructureAnalysis | PositionStructureAnalysis): string { return `Range location: 1h ${summarizeLocation(analysis.timeframes["1h"].location)}, 4h ${summarizeLocation(analysis.timeframes["4h"].location)}, 1d ${summarizeLocation(analysis.timeframes["1d"].location)}.`; }
+function regimeText(regime: MarketRegime): string { return regime.replaceAll("_", " ").toLowerCase(); }
+function invalidationText(risk: RiskEval): string { if (risk.invalidationLevel === null) return "Invalidation remains unclear, so patience matters more than activity."; if (risk.invalidationState === "BROKEN") return `Invalidation is already broken below roughly ${price(risk.invalidationLevel)} KRW.`; return `Invalidation remains clear near ${price(risk.invalidationLevel)} KRW.`; }
+function formatInvalidationLevel(analysis: MarketStructureAnalysis | PositionStructureAnalysis): string { return analysis.invalidationLevel === null ? "Invalidation is still unclear." : `Invalidation is near ${price(analysis.invalidationLevel)} KRW.`; }
+function formatInvalidationLevelFromMode(invalidationLevel: number | null, invalidationState: RiskEval["invalidationState"]): string {
+  if (invalidationLevel === null) return "Invalidation is still unclear.";
+  if (invalidationState === "BROKEN") return `Invalidation has already broken below ${price(invalidationLevel)} KRW.`;
+  return `Invalidation is near ${price(invalidationLevel)} KRW.`;
+}
+function price(value: number): string { return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(Math.max(0, value)); }
+function setupState(
+  supports: string[],
+  blockers: SetupBlocker[],
+  path?: BullishPath,
+  analysis?: MarketStructureAnalysis | PositionStructureAnalysis,
+): DecisionSetupState {
+  if (blockers.length === 0) return "READY";
+  if (canStrongReclaimOverride(blockers, path, analysis)) return "READY";
+  return supports.length >= 3 && blockers.length <= 2 ? "PROMISING" : "BLOCKED";
+}
+
+function hardBlocker(code: SetupBlockerCode, message: string): SetupBlocker {
+  return { code, severity: "HARD", message };
+}
+
+function softBlocker(code: SetupBlockerCode, message: string): SetupBlocker {
+  return { code, severity: "SOFT", message };
+}
+
+function isHardBlocker(blocker: SetupBlocker): boolean {
+  return blocker.severity === "HARD";
+}
+
+function isSoftBlocker(blocker: SetupBlocker): boolean {
+  return blocker.severity === "SOFT";
+}
+
+function canStrongReclaimOverride(
+  blockers: SetupBlocker[],
+  path?: BullishPath,
+  analysis?: MarketStructureAnalysis | PositionStructureAnalysis,
+): boolean {
+  if (!analysis || (path !== "RECLAIM_ENTRY" && path !== "STRENGTH_ADD")) return false;
+  if (!hasStrongReclaimActionQuality(analysis)) return false;
+  if (blockers.some(isHardBlocker)) return false;
+  return blockers.filter(isSoftBlocker).length <= 1;
+}
+
+function getBullishPath(analysis: MarketStructureAnalysis | PositionStructureAnalysis, isAdd: boolean): BullishPath {
+  if ((analysis.reclaimStructure || analysis.breakoutHoldStructure) && !analysis.breakdown1d && !analysis.failedReclaim && getModeInvalidationState(analysis, "RECLAIM") !== "BROKEN") return isAdd ? "STRENGTH_ADD" : "RECLAIM_ENTRY";
+  if (analysis.pullbackZone && !analysis.upperRangeChase && !analysis.breakdown4h && !analysis.breakdown1d) return isAdd ? "PULLBACK_ADD" : "PULLBACK_ENTRY";
+  return null;
+}
+
+function getInvalidationMode(path: BullishPath): InvalidationMode {
+  return path === "RECLAIM_ENTRY" || path === "STRENGTH_ADD" ? "RECLAIM" : "PULLBACK";
+}
+
+function getModeInvalidationLevel(
+  analysis: MarketStructureAnalysis | PositionStructureAnalysis,
+  mode: InvalidationMode,
+): number | null {
+  if (mode === "RECLAIM") {
+    const candidates = [
+      analysis.reclaimLevel,
+      analysis.timeframes["4h"].support,
+      analysis.timeframes["4h"].indicators.ema20,
+    ].filter((value): value is number => value !== null && Number.isFinite(value) && value > 0);
+    return candidates.length > 0 ? Math.max(...candidates) : analysis.invalidationLevel;
+  }
+  return analysis.invalidationLevel;
+}
+
+function getModeInvalidationState(
+  analysis: MarketStructureAnalysis | PositionStructureAnalysis,
+  mode: InvalidationMode,
+): RiskEval["invalidationState"] {
+  if (mode !== "RECLAIM") return analysis.invalidationState;
+  const reclaimLevel = analysis.reclaimLevel;
+  if (reclaimLevel === null) return "UNCLEAR";
+  const buffer = getEngineLevelBuffer(reclaimLevel, analysis.timeframes["1h"].indicators.atr14, 0.08);
+  return analysis.failedReclaim || analysis.timeframes["1h"].latestClose <= reclaimLevel - buffer ? "BROKEN" : "CLEAR";
+}
+
+function hasStrongReclaimActionQuality(analysis: MarketStructureAnalysis | PositionStructureAnalysis): boolean {
+  return Boolean(
+    (analysis.reclaimStructure || analysis.breakoutHoldStructure)
+    && getModeInvalidationState(analysis, "RECLAIM") === "CLEAR"
+    && (!analysis.upperRangeChase || analysis.volumeRecovery || analysis.macdImproving)
+    && (analysis.regime === "BULL_TREND" || analysis.regime === "EARLY_RECOVERY" || analysis.regime === "PULLBACK_IN_UPTREND" || analysis.regime === "RECLAIM_ATTEMPT")
+  );
+}
+
+function isBullishTriggerConfirmed(
+  analysis: MarketStructureAnalysis | PositionStructureAnalysis,
+  path: BullishPath,
+  confirmed: string[],
+): boolean {
+  if (path === "RECLAIM_ENTRY" || path === "STRENGTH_ADD") {
+    const structuralQuality = Number(analysis.reclaimStructure) + Number(analysis.breakoutHoldStructure);
+    const supportingQuality = Number(analysis.macdImproving) + Number(analysis.volumeRecovery);
+    return structuralQuality >= 2 || (structuralQuality >= 1 && supportingQuality >= 1 && confirmed.length >= 2);
+  }
+  return confirmed.length >= 2;
+}
+
+function getEngineLevelBuffer(level: number, atr: number | null, atrMultiplier: number): number {
+  const atrBuffer = atr !== null && atr > 0 ? atr * atrMultiplier : 0;
+  return Math.max(level * 0.0025, atrBuffer);
+}
+
+function bucketEntry(analysis: MarketStructureAnalysis, path: BullishPath): string { return path === "RECLAIM_ENTRY" ? "reclaim-continuation" : analysis.timeframes["4h"].location === "LOWER" ? "four-hour-pullback" : "balanced-range"; }
+function bucketAdd(analysis: PositionStructureAnalysis, path: BullishPath): string { return path === "STRENGTH_ADD" ? "reclaim-strength" : analysis.timeframes["4h"].location === "LOWER" ? "four-hour-pullback" : analysis.pnlPct < 0 ? "near-entry-pullback" : "staged-retest"; }
+function bucketReduce(analysis: PositionStructureAnalysis): string { return analysis.breakdown1d ? "daily-break" : analysis.breakdown4h ? "four-hour-break" : analysis.pnlPct <= -0.08 ? "deep-drawdown" : "trend-weakness"; }
+function getFallbackMarket(context: DecisionContext) { return context.positionState?.asset === "BTC" ? "KRW-BTC" as const : context.positionState?.asset === "ETH" ? "KRW-ETH" as const : null; }

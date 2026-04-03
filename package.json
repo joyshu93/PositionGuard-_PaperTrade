@@ -1,0 +1,26 @@
+{
+  "name": "position-guard",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "deploy:dry-run": "wrangler deploy --dry-run",
+    "check": "npm run typecheck && npm run build && npm run test",
+    "build": "node ./node_modules/typescript/bin/tsc -p tsconfig.json",
+    "typecheck": "node ./node_modules/typescript/bin/tsc -p tsconfig.json --noEmit",
+    "test": "node ./node_modules/typescript/bin/tsc -p tsconfig.json && node --experimental-specifier-resolution=node .\\dist\\tests\\paper-trading.test.js && node --experimental-specifier-resolution=node .\\dist\\tests\\telegram-paper.test.js && node --experimental-specifier-resolution=node .\\dist\\tests\\upbit.normalization.test.js && node --experimental-specifier-resolution=node .\\dist\\tests\\runtime-config.test.js",
+    "cf:dev": "wrangler dev",
+    "cf:deploy": "wrangler deploy",
+    "cf:tail": "wrangler tail",
+    "cf:d1:local": "wrangler d1 migrations apply position-guard --local",
+    "cf:d1:remote": "wrangler d1 migrations apply position-guard --remote",
+    "telegram:webhook:set": "node ./scripts/register-telegram-webhook.mjs"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "latest",
+    "typescript": "^5.8.0",
+    "wrangler": "^4.78.0"
+  }
+}
