@@ -36,9 +36,11 @@ The first paper-trading iteration includes:
 - D1 persistence for accounts, positions, trades, equity snapshots, and strategy decisions
 - Telegram read surfaces:
   - `/status`
+  - `/positions`
   - `/pnl`
   - `/history`
 - Telegram execution summaries for simulated fills
+- one concise hourly summary message per user after each hourly cycle
 
 ## Architecture
 
@@ -80,13 +82,16 @@ On each hourly run:
 5. run rule-based paper-trading decision logic
 6. simulate fills internally when action is required
 7. persist account, position, trade, equity, and strategy decision state
-8. send Telegram execution summaries for simulated fills
+8. persist one aggregate equity snapshot per user after both BTC and ETH finish
+9. send Telegram execution summaries for simulated fills
+10. send one concise hourly summary per user unless sleep mode is enabled
 
 ## Telegram Commands
 
 - `/start`
 - `/help`
 - `/status`
+- `/positions`
 - `/pnl`
 - `/history`
 - `/language <ko|en>`
@@ -106,6 +111,30 @@ Paper execution assumptions are explicit code constants in `src/paper/constants.
 - entry allocation
 - add allocation
 - reduce fraction
+
+## Reporting Semantics
+
+`/pnl` distinguishes:
+
+- realized PnL
+- cumulative realized PnL from closed trades
+- unrealized PnL
+- current equity
+- cumulative return
+- cumulative closed-trade win rate
+- total closed trades
+
+Cumulative stats are calculated from persisted trade history as follows:
+
+- closed trades = all persisted `paper_trades` rows where `side = 'SELL'`
+- winning closed trades = closed trades where `realized_pnl > 0`
+- cumulative closed-trade win rate = `winning closed trades / total closed trades`
+- cumulative realized PnL from trades = `SUM(realized_pnl)` across all closed trades
+- unrealized PnL = current marked value of open BTC/ETH paper positions minus their average entry basis
+- current equity = current cash balance + current marked value of open BTC/ETH paper positions
+- cumulative return = `(current equity - initial cash) / initial cash`
+
+`/history` is intentionally recent-only and is labeled that way. It is not the basis for cumulative win rate.
 
 ## Local Setup
 

@@ -1,4 +1,3 @@
-import { stringifyJson } from "./db.js";
 import type { D1DatabaseLike } from "./db.js";
 import type { PaperTradeInput, PaperTradeRecord } from "../types/persistence.js";
 
@@ -95,4 +94,35 @@ export async function listRecentPaperTradesForUser(
     .all<PaperTradeRow>();
 
   return result.results.map(mapPaperTradeRow);
+}
+
+export async function getCumulativeClosedTradeStatsForUser(
+  db: D1DatabaseLike,
+  userId: number,
+): Promise<{
+  closedTradeCount: number;
+  winningTradeCount: number;
+  realizedPnl: number;
+}> {
+  const row = await db
+    .prepare(
+      `SELECT
+         COUNT(*) AS closed_trade_count,
+         SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END) AS winning_trade_count,
+         COALESCE(SUM(realized_pnl), 0) AS realized_pnl
+       FROM paper_trades
+       WHERE user_id = ? AND side = 'SELL'`,
+    )
+    .bind(userId)
+    .first<{
+      closed_trade_count: number | null;
+      winning_trade_count: number | null;
+      realized_pnl: number | null;
+    }>();
+
+  return {
+    closedTradeCount: row?.closed_trade_count ?? 0,
+    winningTradeCount: row?.winning_trade_count ?? 0,
+    realizedPnl: row?.realized_pnl ?? 0,
+  };
 }

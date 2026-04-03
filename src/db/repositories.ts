@@ -56,7 +56,11 @@ import {
   listPaperPositionsForUser,
   savePaperPosition,
 } from "./paper-positions.js";
-import { createPaperTrade, listRecentPaperTradesForUser } from "./paper-trades.js";
+import {
+  createPaperTrade,
+  getCumulativeClosedTradeStatsForUser,
+  listRecentPaperTradesForUser,
+} from "./paper-trades.js";
 import {
   getHourlyHealthInspection,
   getLatestDecisionLogInspection,
@@ -88,7 +92,6 @@ import {
   buildEquitySnapshot,
   calculatePositionMarketValue,
   calculateUnrealizedPnl,
-  tradeIsWin,
 } from "../paper/math.js";
 
 interface TelegramProfileInput {
@@ -542,6 +545,7 @@ export async function getPaperPerformanceSnapshot(
     listRecentPaperTrades(db, userId, 10),
     getLatestEquitySnapshotForUser(db, userId),
   ]);
+  const cumulativeStats = await getCumulativeClosedTradeStatsForUser(db, userId);
 
   const latestPrices: Record<SupportedAsset, number | null> = {
     BTC: positions.BTC?.lastMarkPrice ?? null,
@@ -561,11 +565,6 @@ export async function getPaperPerformanceSnapshot(
     (accountRecord.initialCash > 0
       ? ((totalEquity - accountRecord.initialCash) / accountRecord.initialCash) * 100
       : 0);
-  const closedTrades = recentTrades
-    .map(tradeIsWin)
-    .filter((value): value is boolean => value !== null);
-  const wins = closedTrades.filter(Boolean).length;
-
   return {
     account: mapPaperAccountRecord(accountRecord),
     positions,
@@ -575,7 +574,13 @@ export async function getPaperPerformanceSnapshot(
     totalEquity,
     unrealizedPnl,
     cumulativeReturnPct,
-    winRate: closedTrades.length > 0 ? wins / closedTrades.length : null,
+    cumulativeClosedTradeCount: cumulativeStats.closedTradeCount,
+    cumulativeWinningTradeCount: cumulativeStats.winningTradeCount,
+    cumulativeWinRate:
+      cumulativeStats.closedTradeCount > 0
+        ? cumulativeStats.winningTradeCount / cumulativeStats.closedTradeCount
+        : null,
+    cumulativeRealizedPnlFromTrades: cumulativeStats.realizedPnl,
   };
 }
 

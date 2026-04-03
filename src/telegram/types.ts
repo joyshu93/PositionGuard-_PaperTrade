@@ -104,6 +104,7 @@ export interface TelegramPaperTradingProvider {
   getStatus(telegramUserId: number, locale: SupportedLocale): Promise<string>;
   getPnl(telegramUserId: number, locale: SupportedLocale): Promise<string>;
   getHistory(telegramUserId: number, locale: SupportedLocale): Promise<string>;
+  getPositions(telegramUserId: number, locale: SupportedLocale): Promise<string>;
 }
 
 export interface TelegramNotificationSnapshot {

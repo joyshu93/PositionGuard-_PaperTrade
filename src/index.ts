@@ -13,7 +13,12 @@ import {
   setLocaleByTelegramUserId,
   setSleepModeByTelegramUserId,
 } from "./db/repositories.js";
-import { renderPaperHistoryMessage, renderPaperPnlMessage, renderPaperStatusMessage } from "./paper/reporting.js";
+import {
+  renderPaperHistoryMessage,
+  renderPaperPnlMessage,
+  renderPaperPositionsMessage,
+  renderPaperStatusMessage,
+} from "./paper/reporting.js";
 
 const jsonHeaders = {
   "content-type": "application/json; charset=utf-8",
@@ -117,6 +122,14 @@ async function handleFetch(
             });
             const snapshot = await getPaperPerformanceSnapshot(env.DB, user.id);
             return renderPaperStatusMessage(snapshot, locale);
+          },
+          async getPositions(telegramUserId, locale) {
+            const user = await ensureTelegramUser(env.DB, {
+              telegramUserId: String(telegramUserId),
+              telegramChatId: String(telegramUserId),
+            });
+            const snapshot = await getPaperPerformanceSnapshot(env.DB, user.id);
+            return renderPaperPositionsMessage(snapshot, locale);
           },
           async getPnl(telegramUserId, locale) {
             const user = await ensureTelegramUser(env.DB, {

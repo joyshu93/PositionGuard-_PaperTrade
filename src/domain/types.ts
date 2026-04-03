@@ -344,6 +344,7 @@ export interface PaperExecutionResult {
   updatedPosition: PaperPosition | null;
   referencePrice: number;
   fillPrice: number | null;
+  latestMarketPrice: number | null;
 }
 
 export interface PaperPerformanceSnapshot {
@@ -355,5 +356,8 @@ export interface PaperPerformanceSnapshot {
   totalEquity: number;
   unrealizedPnl: number;
   cumulativeReturnPct: number;
-  winRate: number | null;
+  cumulativeClosedTradeCount: number;
+  cumulativeWinningTradeCount: number;
+  cumulativeWinRate: number | null;
+  cumulativeRealizedPnlFromTrades: number;
 }

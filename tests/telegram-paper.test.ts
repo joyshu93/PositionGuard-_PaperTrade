@@ -1,5 +1,6 @@
 import { assert } from "./test-helpers.js";
 import { routeCommand } from "../src/telegram/commands.js";
+import { renderPaperPnlMessage } from "../src/paper/reporting.js";
 import type { TelegramCommandContext } from "../src/telegram/types.js";
 
 const baseContext: TelegramCommandContext = {
@@ -34,19 +35,22 @@ const deps = {
     async setSleepMode() {
       return;
     },
-    async setLocale() {
-      return "en" as const;
+    async setLocale(_id: number, locale: "ko" | "en") {
+      return locale;
     },
   },
   paperTradingProvider: {
-    async getStatus() {
-      return "Paper status";
+    async getStatus(_id: number, locale: "ko" | "en") {
+      return locale === "ko" ? "실전 상태" : "Paper status";
     },
-    async getPnl() {
-      return "Paper PnL";
+    async getPositions(_id: number, locale: "ko" | "en") {
+      return locale === "ko" ? "포지션" : "Positions";
     },
-    async getHistory() {
-      return "Paper history";
+    async getPnl(_id: number, locale: "ko" | "en") {
+      return locale === "ko" ? "손익" : "Paper PnL";
+    },
+    async getHistory(_id: number, locale: "ko" | "en") {
+      return locale === "ko" ? "최근 거래 내역" : "Recent paper trades";
     },
   },
 };
@@ -55,6 +59,19 @@ const statusActions = await routeCommand(baseContext, deps);
 assert(
   statusActions[0]?.kind === "sendMessage" && statusActions[0].text.includes("Paper status"),
   "/status should render the paper-trading status provider output.",
+);
+
+const positionsActions = await routeCommand(
+  {
+    ...baseContext,
+    command: "positions",
+    text: "/positions",
+  },
+  deps,
+);
+assert(
+  positionsActions[0]?.kind === "sendMessage" && positionsActions[0].text.includes("Positions"),
+  "/positions should render the focused paper-trading positions provider output.",
 );
 
 const pnlActions = await routeCommand(
@@ -79,7 +96,7 @@ const historyActions = await routeCommand(
   deps,
 );
 assert(
-  historyActions[0]?.kind === "sendMessage" && historyActions[0].text.includes("Paper history"),
+  historyActions[0]?.kind === "sendMessage" && historyActions[0].text.includes("Recent paper trades"),
   "/history should render the paper-trading history provider output.",
 );
 
@@ -110,4 +127,61 @@ assert(
   legacyActions[0]?.kind === "sendMessage" &&
     legacyActions[0].text.includes("no longer uses manual record-only state commands"),
   "Legacy manual-state commands should explain the new paper-trading boundary.",
+);
+
+const koreanStatusActions = await routeCommand(
+  {
+    ...baseContext,
+    profile: {
+      ...baseContext.profile,
+      languageCode: "ko-KR",
+    },
+  },
+  {
+    ...deps,
+    stateStore: {
+      ...deps.stateStore,
+      async upsertUserState() {
+        return "ko" as const;
+      },
+    },
+  },
+);
+assert(
+  koreanStatusActions[0]?.kind === "sendMessage" && koreanStatusActions[0].text.includes("실전 상태"),
+  "/status should render Korean output when locale is ko.",
+);
+
+const koreanPnlMessage = renderPaperPnlMessage(
+  {
+    account: {
+      id: 1,
+      userId: 1,
+      currency: "KRW",
+      initialCash: 1_000_000,
+      cashBalance: 1_050_000,
+      realizedPnl: 20_000,
+      totalFeesPaid: 500,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    },
+    positions: { BTC: null, ETH: null },
+    latestPrices: { BTC: null, ETH: null },
+    recentTrades: [],
+    latestEquity: null,
+    totalEquity: 1_050_000,
+    unrealizedPnl: 0,
+    cumulativeReturnPct: 5,
+    cumulativeClosedTradeCount: 4,
+    cumulativeWinningTradeCount: 3,
+    cumulativeWinRate: 0.75,
+    cumulativeRealizedPnlFromTrades: 20_000,
+  },
+  "ko",
+);
+assert(
+  koreanPnlMessage.includes("손익") &&
+    koreanPnlMessage.includes("누적 승률") &&
+    koreanPnlMessage.includes("저장된 전체 매도 체결 이력"),
+  "Korean /pnl messaging should use Korean labels and cumulative-stat wording.",
 );
