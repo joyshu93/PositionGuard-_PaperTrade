@@ -90,3 +90,49 @@ export async function listRecentStrategyDecisionsForUser(
 
   return result.results.map(mapStrategyDecisionRow);
 }
+
+export async function getLatestStrategyDecisionForUserAsset(
+  db: D1DatabaseLike,
+  userId: number,
+  asset: "BTC" | "ETH",
+): Promise<StrategyDecisionRecord | null> {
+  const row = await db
+    .prepare(
+      `SELECT id, user_id, asset, market, action, execution_status, summary, reasons_json,
+              rationale_json, reference_price, fill_price, trade_id, created_at
+       FROM strategy_decisions
+       WHERE user_id = ? AND asset = ?
+       ORDER BY created_at DESC
+       LIMIT 1`,
+    )
+    .bind(userId, asset)
+    .first<StrategyDecisionRow>();
+
+  return row ? mapStrategyDecisionRow(row) : null;
+}
+
+export async function getStrategyDecisionActionCountsForUserBetween(
+  db: D1DatabaseLike,
+  userId: number,
+  startIso: string,
+  endIso: string,
+): Promise<Array<{ asset: "BTC" | "ETH"; action: "HOLD" | "ENTRY" | "ADD" | "REDUCE" | "EXIT"; count: number }>> {
+  const result = await db
+    .prepare(
+      `SELECT asset, action, COUNT(*) AS count
+       FROM strategy_decisions
+       WHERE user_id = ?
+         AND created_at >= ?
+         AND created_at < ?
+       GROUP BY asset, action
+       ORDER BY asset ASC, action ASC`,
+    )
+    .bind(userId, startIso, endIso)
+    .all<{
+      asset: "BTC" | "ETH";
+      action: "HOLD" | "ENTRY" | "ADD" | "REDUCE" | "EXIT";
+      count: number;
+    }>();
+
+  return result.results;
+}

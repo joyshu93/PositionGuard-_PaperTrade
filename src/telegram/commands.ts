@@ -38,6 +38,12 @@ export async function routeCommand(
       return [send(context.chatId, await deps.paperTradingProvider?.getPnl(context.userId, locale) ?? unavailable(locale))];
     case "history":
       return [send(context.chatId, await deps.paperTradingProvider?.getHistory(context.userId, locale) ?? unavailable(locale))];
+    case "settings":
+      return [send(context.chatId, await deps.paperTradingProvider?.getSettings(context.userId, locale) ?? unavailable(locale))];
+    case "decision":
+      return [send(context.chatId, await deps.paperTradingProvider?.getDecision(context.userId, locale) ?? unavailable(locale))];
+    case "daily":
+      return [send(context.chatId, await deps.paperTradingProvider?.getDaily(context.userId, locale) ?? unavailable(locale))];
     case "language":
       return handleLanguage(context, deps, locale);
     case "sleep":
@@ -50,7 +56,7 @@ export async function routeCommand(
     case "lastalert":
       return [send(context.chatId, legacyNotice(locale))];
     default:
-      return [send(context.chatId, locale === "ko" ? "알 수 없는 명령입니다. /help 를 확인해 주세요." : "Unknown command. Use /help to see supported commands.")];
+      return [send(context.chatId, locale === "ko" ? "알 수 없는 명령입니다. /help를 확인해 주세요." : "Unknown command. Use /help to see supported commands.")];
   }
 }
 
@@ -79,37 +85,40 @@ async function handleSleep(
   }
 
   await deps.stateStore?.setSleepMode(context.userId, enabled);
-  return [send(context.chatId, locale === "ko" ? `수면 모드는 이제 ${enabled ? "켜짐" : "꺼짐"} 상태입니다.` : `Sleep mode is now ${enabled ? "on" : "off"}.`)];
+  return [send(context.chatId, locale === "ko" ? `수면 모드가 ${enabled ? "켜졌습니다" : "꺼졌습니다"}.` : `Sleep mode is now ${enabled ? "on" : "off"}.`)];
 }
 
 function buildStartText(locale: SupportedLocale): string {
   if (locale === "ko") {
     return [
       "PositionGuard PaperTrade는 BTC/ETH 전용 자동 페이퍼트레이딩 Telegram 봇입니다.",
-      "실제 주문은 전송하지 않으며 Upbit 공개 시세만 사용해 내부적으로 모의 체결합니다.",
-      "주요 명령: /status /positions /pnl /history",
+      "실거래 주문은 전송하지 않으며 Upbit 공개 시세만 사용해 내부적으로 모의 체결합니다.",
+      "주요 명령: /status /positions /pnl /history /decision /daily /settings",
     ].join("\n");
   }
 
   return [
     "PositionGuard PaperTrade is an automatic BTC/ETH-only paper-trading Telegram bot.",
     "It never sends real orders and uses public Upbit market data only for internal simulated fills.",
-    "Core commands: /status /positions /pnl /history",
+    "Core commands: /status /positions /pnl /history /decision /daily /settings",
   ].join("\n");
 }
 
 function buildHelpText(locale: SupportedLocale): string {
   if (locale === "ko") {
     return [
-      "명령어:",
+      "명령어",
       "/start - 제품 소개",
       "/help - 명령어 목록",
-      "/status - 현금, 자산, 요약 손익",
+      "/status - 현금, 총자산, 손익 요약",
       "/positions - BTC/ETH 포지션 상세",
-      "/pnl - 누적 손익과 승률",
-      "/history - 최근 모의 체결 내역",
+      "/pnl - 누적 손익과 종료 거래 승률",
+      "/history - 최근 모의 체결 이력",
+      "/decision - 최신 BTC/ETH 결정 요약",
+      "/daily - 오늘의 거래/액션 요약 (KST 기준)",
+      "/settings - 현재 적용 중인 전역 설정",
       "/language <ko|en> - 언어 선택",
-      "/sleep on|off - 시간별 요약과 체결 알림 끄기/켜기",
+      "/sleep on|off - 실행 알림과 시간별 요약 끄기/켜기",
     ].join("\n");
   }
 
@@ -119,8 +128,11 @@ function buildHelpText(locale: SupportedLocale): string {
     "/help - command list",
     "/status - cash, equity, and compact PnL summary",
     "/positions - focused BTC/ETH position view",
-    "/pnl - cumulative performance and win rate",
+    "/pnl - cumulative performance and closed-trade win rate",
     "/history - recent simulated trades",
+    "/decision - latest BTC/ETH decision summaries",
+    "/daily - today's paper-trading activity summary (KST)",
+    "/settings - active global paper-trading settings",
     "/language <ko|en> - choose bot language",
     "/sleep on|off - mute or resume hourly and execution reports",
   ].join("\n");
@@ -157,12 +169,14 @@ export function buildActionNeededAlertActions(input: {
 
 function legacyNotice(locale: SupportedLocale): string {
   return locale === "ko"
-    ? "이 페이퍼트레이딩 버전은 더 이상 수동 기록 명령을 사용하지 않습니다. /status, /positions, /pnl, /history 를 사용해 주세요."
-    : "This paper-trading version no longer uses manual record-only state commands. Use /status, /positions, /pnl, and /history instead.";
+    ? "이 버전은 더 이상 수동 기록용 상태 명령을 쓰지 않습니다. /status, /positions, /pnl, /history, /decision, /daily, /settings를 사용해 주세요."
+    : "This version no longer uses manual record-only state commands. Use /status, /positions, /pnl, /history, /decision, /daily, and /settings instead.";
 }
 
 function unavailable(locale: SupportedLocale): string {
-  return locale === "ko" ? "아직 페이퍼트레이딩 상태를 불러올 수 없습니다." : "Paper-trading status is not available yet.";
+  return locale === "ko"
+    ? "아직 페이퍼트레이딩 상태를 불러올 수 없습니다."
+    : "Paper-trading status is not available yet.";
 }
 
 function send(chatId: number, text: string, replyMarkup?: TelegramReplyMarkup): TelegramOutgoingAction {

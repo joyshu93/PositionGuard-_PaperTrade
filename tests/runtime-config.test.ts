@@ -1,5 +1,6 @@
 import {
   assertRuntimeConfig,
+  createRuntimeConfig,
   getRuntimeConfigReport,
 } from "../src/env.js";
 import { assert, assertEqual } from "./test-helpers.js";
@@ -22,6 +23,45 @@ const validReport = getRuntimeConfigReport(
 
 assertEqual(validReport.ok, true, "A complete deployment config should validate.");
 assertEqual(validReport.healthPath, "/healthz", "Configured health path should be preserved.");
+
+const runtimeConfig = createRuntimeConfig({
+  DB: {
+    prepare() {
+      throw new Error("not used");
+    },
+  } as unknown as D1Database,
+  TELEGRAM_BOT_TOKEN: "bot-token",
+  TELEGRAM_WEBHOOK_SECRET: "secret-token",
+  PAPER_INITIAL_CASH_KRW: "2500000",
+  PAPER_FEE_RATE: "0.0008",
+  PAPER_ENTRY_ALLOCATION: "0.35",
+});
+
+assertEqual(
+  runtimeConfig.paperTradingSettings.values.initialPaperCashKrw,
+  2_500_000,
+  "Runtime config should resolve explicit paper-cash overrides.",
+);
+assertEqual(
+  runtimeConfig.paperTradingSettings.values.feeRate,
+  0.0008,
+  "Runtime config should resolve explicit fee overrides.",
+);
+assertEqual(
+  runtimeConfig.paperTradingSettings.values.slippageRate,
+  0.0003,
+  "Missing paper settings should fall back to explicit defaults.",
+);
+assertEqual(
+  runtimeConfig.paperTradingSettings.sourceByField.entryAllocation,
+  "env",
+  "Settings metadata should indicate when a field comes from an env override.",
+);
+assertEqual(
+  runtimeConfig.paperTradingSettings.sourceByField.reduceFraction,
+  "default",
+  "Settings metadata should indicate when a field remains on the default fallback.",
+);
 
 const invalidReport = getRuntimeConfigReport(
   {

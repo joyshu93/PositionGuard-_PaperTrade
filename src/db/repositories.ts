@@ -3,8 +3,12 @@ import type {
   DecisionLogRecord,
   EquitySnapshot,
   PaperAccount,
+  PaperDailySummary,
+  PaperDecisionSnapshot,
   PaperPerformanceSnapshot,
   PaperPosition,
+  PaperTradingSettings,
+  PaperTradingSettingsView,
   PaperTrade,
   PositionState,
   StrategyDecisionRecord as DomainStrategyDecisionRecord,
@@ -59,6 +63,7 @@ import {
 import {
   createPaperTrade,
   getCumulativeClosedTradeStatsForUser,
+  getPaperTradeStatsForUserBetween,
   listRecentPaperTradesForUser,
 } from "./paper-trades.js";
 import {
@@ -70,6 +75,8 @@ import {
 } from "./operator-visibility.js";
 import {
   createStrategyDecision,
+  getLatestStrategyDecisionForUserAsset,
+  getStrategyDecisionActionCountsForUserBetween,
   listRecentStrategyDecisionsForUser,
 } from "./strategy-decisions.js";
 import {
@@ -87,7 +94,7 @@ import {
   upsertUser,
 } from "./users.js";
 import { assessReadiness } from "../readiness.js";
-import { PAPER_INITIAL_CASH_KRW } from "../paper/constants.js";
+import { DEFAULT_PAPER_TRADING_SETTINGS } from "../paper/config.js";
 import {
   buildEquitySnapshot,
   calculatePositionMarketValue,
@@ -145,6 +152,7 @@ export interface TelegramProfileSnapshot {
 export async function ensureTelegramUser(
   db: D1DatabaseLike,
   input: TelegramProfileInput,
+  initialCash = DEFAULT_PAPER_TRADING_SETTINGS.initialPaperCashKrw,
 ): Promise<User> {
   const record = await upsertUser(db, {
     telegramUserId: input.telegramUserId,
@@ -155,7 +163,7 @@ export async function ensureTelegramUser(
     locale: input.locale ?? null,
   });
 
-  await ensurePaperAccountForUser(db, record.id, PAPER_INITIAL_CASH_KRW);
+  await ensurePaperAccountForUser(db, record.id, initialCash);
 
   return mapUserRecord(record);
 }
@@ -386,8 +394,9 @@ export async function getUserByTelegramUserId(
 export async function ensurePaperAccountByUserId(
   db: D1DatabaseLike,
   userId: number,
+  initialCash = DEFAULT_PAPER_TRADING_SETTINGS.initialPaperCashKrw,
 ): Promise<PaperAccount> {
-  const record = await ensurePaperAccountForUser(db, userId, PAPER_INITIAL_CASH_KRW);
+  const record = await ensurePaperAccountForUser(db, userId, initialCash);
   return mapPaperAccountRecord(record);
 }
 
@@ -538,8 +547,9 @@ export async function listRecentStrategyDecisions(
 export async function getPaperPerformanceSnapshot(
   db: D1DatabaseLike,
   userId: number,
+  initialCash = DEFAULT_PAPER_TRADING_SETTINGS.initialPaperCashKrw,
 ): Promise<PaperPerformanceSnapshot> {
-  const accountRecord = await ensurePaperAccountForUser(db, userId, PAPER_INITIAL_CASH_KRW);
+  const accountRecord = await ensurePaperAccountForUser(db, userId, initialCash);
   const [positions, recentTrades, latestEquityRecord] = await Promise.all([
     listPaperPositionSnapshotsForUser(db, userId),
     listRecentPaperTrades(db, userId, 10),
@@ -581,6 +591,65 @@ export async function getPaperPerformanceSnapshot(
         ? cumulativeStats.winningTradeCount / cumulativeStats.closedTradeCount
         : null,
     cumulativeRealizedPnlFromTrades: cumulativeStats.realizedPnl,
+  };
+}
+
+export async function getLatestPaperDecisionSnapshot(
+  db: D1DatabaseLike,
+  userId: number,
+): Promise<PaperDecisionSnapshot> {
+  const [btc, eth] = await Promise.all([
+    getLatestStrategyDecisionForUserAsset(db, userId, "BTC"),
+    getLatestStrategyDecisionForUserAsset(db, userId, "ETH"),
+  ]);
+
+  return {
+    latestByAsset: {
+      BTC: btc ? mapStrategyDecisionRecord(btc) : null,
+      ETH: eth ? mapStrategyDecisionRecord(eth) : null,
+    },
+  };
+}
+
+export async function getPaperDailySummary(
+  db: D1DatabaseLike,
+  userId: number,
+  currentTotalEquity: number,
+  now = new Date(),
+): Promise<PaperDailySummary> {
+  const { startIso, endIso, dayLabel } = getKstDayWindow(now);
+  const [tradeStats, actionRows] = await Promise.all([
+    getPaperTradeStatsForUserBetween(db, userId, startIso, endIso),
+    getStrategyDecisionActionCountsForUserBetween(db, userId, startIso, endIso),
+  ]);
+
+  const actionCounts: PaperDailySummary["actionCounts"] = {
+    BTC: {},
+    ETH: {},
+  };
+
+  for (const row of actionRows) {
+    actionCounts[row.asset][row.action] = row.count;
+  }
+
+  return {
+    timezone: "Asia/Seoul",
+    dayLabel,
+    tradeCount: tradeStats.tradeCount,
+    realizedPnl: tradeStats.realizedPnl,
+    currentTotalEquity,
+    actionCounts,
+  };
+}
+
+export function buildPaperTradingSettingsView(
+  settings: PaperTradingSettings,
+  sourceByField: PaperTradingSettingsView["sourceByField"],
+): PaperTradingSettingsView {
+  return {
+    values: settings,
+    scope: "global",
+    sourceByField,
   };
 }
 
@@ -765,4 +834,25 @@ async function syncUserSetupCompleteness(
 
   const readiness = assessReadiness(mapUserStateSnapshot(snapshot));
   await setUserOnboardingComplete(db, telegramUserId, readiness.isReady);
+}
+
+function getKstDayWindow(now: Date): {
+  startIso: string;
+  endIso: string;
+  dayLabel: string;
+} {
+  const kstOffsetMs = 9 * 60 * 60 * 1000;
+  const shifted = new Date(now.getTime() + kstOffsetMs);
+  const year = shifted.getUTCFullYear();
+  const month = shifted.getUTCMonth();
+  const day = shifted.getUTCDate();
+
+  const startMs = Date.UTC(year, month, day, 0, 0, 0, 0) - kstOffsetMs;
+  const endMs = startMs + 24 * 60 * 60 * 1000;
+
+  return {
+    startIso: new Date(startMs).toISOString(),
+    endIso: new Date(endMs).toISOString(),
+    dayLabel: `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")} KST`,
+  };
 }

@@ -310,6 +310,7 @@ export interface PaperTradingContext {
   position: PaperPosition | null;
   marketSnapshot: MarketSnapshot;
   generatedAt: string;
+  settings: PaperTradingSettings;
 }
 
 export interface PaperTradingDecision {
@@ -360,4 +361,35 @@ export interface PaperPerformanceSnapshot {
   cumulativeWinningTradeCount: number;
   cumulativeWinRate: number | null;
   cumulativeRealizedPnlFromTrades: number;
+}
+
+export interface PaperTradingSettings {
+  initialPaperCashKrw: number;
+  feeRate: number;
+  slippageRate: number;
+  minimumTradeValueKrw: number;
+  entryAllocation: number;
+  addAllocation: number;
+  reduceFraction: number;
+}
+
+export type PaperTradingSettingSource = "default" | "env";
+
+export interface PaperTradingSettingsView {
+  values: PaperTradingSettings;
+  scope: "global";
+  sourceByField: Record<keyof PaperTradingSettings, PaperTradingSettingSource>;
+}
+
+export interface PaperDailySummary {
+  timezone: "Asia/Seoul";
+  dayLabel: string;
+  tradeCount: number;
+  realizedPnl: number;
+  currentTotalEquity: number;
+  actionCounts: Record<SupportedAsset, Partial<Record<PaperTradeAction, number>>>;
+}
+
+export interface PaperDecisionSnapshot {
+  latestByAsset: Record<SupportedAsset, StrategyDecisionRecord | null>;
 }

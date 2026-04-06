@@ -1,6 +1,9 @@
 import { assert } from "./test-helpers.js";
 import { routeCommand } from "../src/telegram/commands.js";
-import { renderPaperPnlMessage } from "../src/paper/reporting.js";
+import {
+  getLocalizedPaperActionLabel,
+  renderPaperPnlMessage,
+} from "../src/paper/reporting.js";
 import type { TelegramCommandContext } from "../src/telegram/types.js";
 
 const baseContext: TelegramCommandContext = {
@@ -41,7 +44,7 @@ const deps = {
   },
   paperTradingProvider: {
     async getStatus(_id: number, locale: "ko" | "en") {
-      return locale === "ko" ? "실전 상태" : "Paper status";
+      return locale === "ko" ? "페이퍼 상태" : "Paper status";
     },
     async getPositions(_id: number, locale: "ko" | "en") {
       return locale === "ko" ? "포지션" : "Positions";
@@ -50,7 +53,16 @@ const deps = {
       return locale === "ko" ? "손익" : "Paper PnL";
     },
     async getHistory(_id: number, locale: "ko" | "en") {
-      return locale === "ko" ? "최근 거래 내역" : "Recent paper trades";
+      return locale === "ko" ? "최근 체결" : "Recent paper trades";
+    },
+    async getSettings(_id: number, locale: "ko" | "en") {
+      return locale === "ko" ? "설정" : "Settings";
+    },
+    async getDecision(_id: number, locale: "ko" | "en") {
+      return locale === "ko" ? "최근 결정" : "Latest decisions";
+    },
+    async getDaily(_id: number, locale: "ko" | "en") {
+      return locale === "ko" ? "일간 요약" : "Daily summary";
     },
   },
 };
@@ -98,6 +110,45 @@ const historyActions = await routeCommand(
 assert(
   historyActions[0]?.kind === "sendMessage" && historyActions[0].text.includes("Recent paper trades"),
   "/history should render the paper-trading history provider output.",
+);
+
+const settingsActions = await routeCommand(
+  {
+    ...baseContext,
+    command: "settings",
+    text: "/settings",
+  },
+  deps,
+);
+assert(
+  settingsActions[0]?.kind === "sendMessage" && settingsActions[0].text.includes("Settings"),
+  "/settings should render the active settings output.",
+);
+
+const decisionActions = await routeCommand(
+  {
+    ...baseContext,
+    command: "decision",
+    text: "/decision",
+  },
+  deps,
+);
+assert(
+  decisionActions[0]?.kind === "sendMessage" && decisionActions[0].text.includes("Latest decisions"),
+  "/decision should render the latest decision output.",
+);
+
+const dailyActions = await routeCommand(
+  {
+    ...baseContext,
+    command: "daily",
+    text: "/daily",
+  },
+  deps,
+);
+assert(
+  dailyActions[0]?.kind === "sendMessage" && dailyActions[0].text.includes("Daily summary"),
+  "/daily should render the current-day summary output.",
 );
 
 const startActions = await routeCommand(
@@ -148,7 +199,7 @@ const koreanStatusActions = await routeCommand(
   },
 );
 assert(
-  koreanStatusActions[0]?.kind === "sendMessage" && koreanStatusActions[0].text.includes("실전 상태"),
+  koreanStatusActions[0]?.kind === "sendMessage" && koreanStatusActions[0].text.includes("페이퍼 상태"),
   "/status should render Korean output when locale is ko.",
 );
 
@@ -181,7 +232,13 @@ const koreanPnlMessage = renderPaperPnlMessage(
 );
 assert(
   koreanPnlMessage.includes("손익") &&
-    koreanPnlMessage.includes("누적 승률") &&
-    koreanPnlMessage.includes("저장된 전체 매도 체결 이력"),
+    koreanPnlMessage.includes("누적 종료 거래 승률") &&
+    koreanPnlMessage.includes("저장된 전체 종료 매도 체결 이력 기준"),
   "Korean /pnl messaging should use Korean labels and cumulative-stat wording.",
+);
+
+assert(
+  getLocalizedPaperActionLabel("ko", "ENTRY") === "진입" &&
+    getLocalizedPaperActionLabel("en", "REDUCE") === "Reduce",
+  "Localized action labels should expose operator-friendly action wording in both locales.",
 );

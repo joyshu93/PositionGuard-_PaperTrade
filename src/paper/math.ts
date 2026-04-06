@@ -2,19 +2,13 @@ import type {
   EquitySnapshot,
   PaperAccount,
   PaperPosition,
+  PaperTradingSettings,
   PaperTrade,
   PaperTradeAction,
   PaperTradeSide,
   SupportedAsset,
 } from "../domain/types.js";
-import {
-  PAPER_ADD_ALLOCATION,
-  PAPER_ENTRY_ALLOCATION,
-  PAPER_FEE_RATE,
-  PAPER_MIN_TRADE_VALUE_KRW,
-  PAPER_REDUCE_FRACTION,
-  PAPER_SLIPPAGE_RATE,
-} from "./constants.js";
+import { DEFAULT_PAPER_TRADING_SETTINGS } from "./config.js";
 
 export interface SimulatedFill {
   action: Exclude<PaperTradeAction, "HOLD">;
@@ -35,29 +29,52 @@ export function roundQuantity(value: number): number {
   return Number(value.toFixed(12));
 }
 
-export function getPaperBuyFillPrice(referencePrice: number): number {
-  return roundMoney(referencePrice * (1 + PAPER_SLIPPAGE_RATE));
+function withSettings(settings?: PaperTradingSettings): PaperTradingSettings {
+  return settings ?? DEFAULT_PAPER_TRADING_SETTINGS;
 }
 
-export function getPaperSellFillPrice(referencePrice: number): number {
-  return roundMoney(referencePrice * (1 - PAPER_SLIPPAGE_RATE));
+export function getPaperBuyFillPrice(
+  referencePrice: number,
+  settings?: PaperTradingSettings,
+): number {
+  const activeSettings = withSettings(settings);
+  return roundMoney(referencePrice * (1 + activeSettings.slippageRate));
 }
 
-export function getMaxAffordableQuantity(cashBalance: number, fillPrice: number): number {
+export function getPaperSellFillPrice(
+  referencePrice: number,
+  settings?: PaperTradingSettings,
+): number {
+  const activeSettings = withSettings(settings);
+  return roundMoney(referencePrice * (1 - activeSettings.slippageRate));
+}
+
+export function getMaxAffordableQuantity(
+  cashBalance: number,
+  fillPrice: number,
+  settings?: PaperTradingSettings,
+): number {
+  const activeSettings = withSettings(settings);
   if (cashBalance <= 0 || fillPrice <= 0) {
     return 0;
   }
 
-  return roundQuantity(cashBalance / (fillPrice * (1 + PAPER_FEE_RATE)));
+  return roundQuantity(cashBalance / (fillPrice * (1 + activeSettings.feeRate)));
 }
 
-export function calculateBuyQuantity(targetCashToUse: number, cashBalance: number, fillPrice: number): number {
+export function calculateBuyQuantity(
+  targetCashToUse: number,
+  cashBalance: number,
+  fillPrice: number,
+  settings?: PaperTradingSettings,
+): number {
+  const activeSettings = withSettings(settings);
   const usableCash = Math.min(targetCashToUse, cashBalance);
-  if (usableCash < PAPER_MIN_TRADE_VALUE_KRW) {
+  if (usableCash < activeSettings.minimumTradeValueKrw) {
     return 0;
   }
 
-  return roundQuantity(usableCash / (fillPrice * (1 + PAPER_FEE_RATE)));
+  return roundQuantity(usableCash / (fillPrice * (1 + activeSettings.feeRate)));
 }
 
 export function calculateSellQuantity(positionQuantity: number, fraction: number): number {
@@ -72,18 +89,20 @@ export function calculateBuyFill(
   action: "ENTRY" | "ADD",
   quantity: number,
   referencePrice: number,
+  settings?: PaperTradingSettings,
 ): SimulatedFill | null {
+  const activeSettings = withSettings(settings);
   if (quantity <= 0) {
     return null;
   }
 
-  const fillPrice = getPaperBuyFillPrice(referencePrice);
+  const fillPrice = getPaperBuyFillPrice(referencePrice, activeSettings);
   const grossAmount = roundMoney(quantity * fillPrice);
-  if (grossAmount < PAPER_MIN_TRADE_VALUE_KRW) {
+  if (grossAmount < activeSettings.minimumTradeValueKrw) {
     return null;
   }
 
-  const feeAmount = roundMoney(grossAmount * PAPER_FEE_RATE);
+  const feeAmount = roundMoney(grossAmount * activeSettings.feeRate);
 
   return {
     action,
@@ -93,7 +112,7 @@ export function calculateBuyFill(
     grossAmount,
     feeAmount,
     realizedPnl: 0,
-    slippageRate: PAPER_SLIPPAGE_RATE,
+    slippageRate: activeSettings.slippageRate,
   };
 }
 
@@ -102,18 +121,20 @@ export function calculateSellFill(
   quantity: number,
   referencePrice: number,
   averageEntryPrice: number,
+  settings?: PaperTradingSettings,
 ): SimulatedFill | null {
+  const activeSettings = withSettings(settings);
   if (quantity <= 0) {
     return null;
   }
 
-  const fillPrice = getPaperSellFillPrice(referencePrice);
+  const fillPrice = getPaperSellFillPrice(referencePrice, activeSettings);
   const grossAmount = roundMoney(quantity * fillPrice);
-  if (grossAmount < PAPER_MIN_TRADE_VALUE_KRW) {
+  if (grossAmount < activeSettings.minimumTradeValueKrw) {
     return null;
   }
 
-  const feeAmount = roundMoney(grossAmount * PAPER_FEE_RATE);
+  const feeAmount = roundMoney(grossAmount * activeSettings.feeRate);
   const realizedPnl = roundMoney((fillPrice - averageEntryPrice) * quantity - feeAmount);
 
   return {
@@ -124,7 +145,7 @@ export function calculateSellFill(
     grossAmount,
     feeAmount,
     realizedPnl,
-    slippageRate: PAPER_SLIPPAGE_RATE,
+    slippageRate: activeSettings.slippageRate,
   };
 }
 
@@ -264,13 +285,18 @@ export function buildEquitySnapshot(params: {
   };
 }
 
-export function getDefaultTargetCash(action: "ENTRY" | "ADD", cashBalance: number): number {
-  const ratio = action === "ENTRY" ? PAPER_ENTRY_ALLOCATION : PAPER_ADD_ALLOCATION;
+export function getDefaultTargetCash(
+  action: "ENTRY" | "ADD",
+  cashBalance: number,
+  settings?: PaperTradingSettings,
+): number {
+  const activeSettings = withSettings(settings);
+  const ratio = action === "ENTRY" ? activeSettings.entryAllocation : activeSettings.addAllocation;
   return roundMoney(cashBalance * ratio);
 }
 
-export function getDefaultReduceFraction(): number {
-  return PAPER_REDUCE_FRACTION;
+export function getDefaultReduceFraction(settings?: PaperTradingSettings): number {
+  return withSettings(settings).reduceFraction;
 }
 
 export function tradeIsWin(trade: PaperTrade): boolean | null {

@@ -2,6 +2,7 @@ import { createRuntimeConfig, type Env } from "./env.js";
 import type {
   PaperExecutionResult,
   PaperPerformanceSnapshot,
+  PaperTradingSettings,
   SupportedAsset,
   SupportedLocale,
   SupportedMarket,
@@ -31,6 +32,7 @@ import {
   calculateSellQuantity,
   getPaperBuyFillPrice,
 } from "./paper/math.js";
+import { DEFAULT_PAPER_TRADING_SETTINGS } from "./paper/config.js";
 import { resolveUserLocale } from "./i18n/index.js";
 
 const SUPPORTED_ASSETS: SupportedAsset[] = ["BTC", "ETH"];
@@ -56,6 +58,7 @@ export async function runHourlyCycle(env: Env): Promise<void> {
       telegramClient,
       userState,
       upbitBaseUrl: runtime.upbitBaseUrl,
+      paperTradingSettings: runtime.paperTradingSettings.values,
     });
   }
 }
@@ -65,6 +68,7 @@ export async function runUserHourlyCycle(params: {
   telegramClient: ReturnType<typeof createTelegramBotClient>;
   userState: UserStateBundle;
   upbitBaseUrl: string | null;
+  paperTradingSettings?: PaperTradingSettings;
   ensureAccount?: typeof ensurePaperAccountByUserId;
   processAssetCycle?: typeof processPaperTradingCycle;
   persistAggregateSnapshot?: typeof createAggregateEquitySnapshot;
@@ -79,13 +83,14 @@ export async function runUserHourlyCycle(params: {
     telegramClient,
     userState,
     upbitBaseUrl,
+    paperTradingSettings,
     ensureAccount = ensurePaperAccountByUserId,
     processAssetCycle = processPaperTradingCycle,
     persistAggregateSnapshot = createAggregateEquitySnapshot,
     loadPerformanceSnapshot = getPaperPerformanceSnapshot,
   } = params;
 
-  await ensureAccount(db, userState.user.id);
+  await ensureAccount(db, userState.user.id, paperTradingSettings?.initialPaperCashKrw);
 
   const assetResults: UserHourlyAssetResult[] = [];
   for (const asset of SUPPORTED_ASSETS) {
@@ -97,13 +102,22 @@ export async function runUserHourlyCycle(params: {
       asset,
       market,
       upbitBaseUrl,
+      paperTradingSettings,
     );
     assetResults.push({ asset, execution });
   }
 
-  const account = await ensureAccount(db, userState.user.id);
+  const account = await ensureAccount(
+    db,
+    userState.user.id,
+    paperTradingSettings?.initialPaperCashKrw,
+  );
   await persistAggregateSnapshot(db, userState.user.id, account, null);
-  const performanceSnapshot = await loadPerformanceSnapshot(db, userState.user.id);
+  const performanceSnapshot = await loadPerformanceSnapshot(
+    db,
+    userState.user.id,
+    paperTradingSettings?.initialPaperCashKrw,
+  );
 
   if (userState.user.telegramChatId && !userState.user.sleepModeEnabled) {
     const locale = resolveUserLocale(userState.user.locale ?? null);
@@ -132,6 +146,7 @@ export async function processPaperTradingCycle(
   asset: SupportedAsset,
   market: SupportedMarket,
   upbitBaseUrl: string | null = null,
+  paperTradingSettings: PaperTradingSettings = DEFAULT_PAPER_TRADING_SETTINGS,
 ): Promise<PaperExecutionResult> {
   const marketResult = await getMarketSnapshotResult(upbitBaseUrl ?? undefined, market);
   if (!marketResult.ok) {
@@ -157,7 +172,11 @@ export async function processPaperTradingCycle(
       summary: skipped.summary,
       reasons: skipped.reasons,
       trade: null,
-      updatedAccount: await ensurePaperAccountByUserId(db, userState.user.id),
+      updatedAccount: await ensurePaperAccountByUserId(
+        db,
+        userState.user.id,
+        paperTradingSettings.initialPaperCashKrw,
+      ),
       updatedPosition: await getPaperPositionSnapshotByUserAsset(db, userState.user.id, asset),
       referencePrice: 0,
       fillPrice: null,
@@ -166,7 +185,11 @@ export async function processPaperTradingCycle(
   }
 
   const locale = resolveUserLocale(userState.user.locale ?? null);
-  const account = await ensurePaperAccountByUserId(db, userState.user.id);
+  const account = await ensurePaperAccountByUserId(
+    db,
+    userState.user.id,
+    paperTradingSettings.initialPaperCashKrw,
+  );
   const position = await getPaperPositionSnapshotByUserAsset(db, userState.user.id, asset);
   const context = {
     user: {
@@ -182,6 +205,7 @@ export async function processPaperTradingCycle(
     position,
     marketSnapshot: marketResult.snapshot,
     generatedAt: new Date().toISOString(),
+    settings: paperTradingSettings,
   };
   const decision = decidePaperTrade(context);
   const execution = await executePaperDecision(db, {
@@ -191,6 +215,7 @@ export async function processPaperTradingCycle(
     account,
     position,
     decision,
+    settings: paperTradingSettings,
   });
 
   await createStrategyDecisionRecord(db, {
@@ -213,7 +238,11 @@ export async function processPaperTradingCycle(
     userState.user.telegramChatId &&
     !userState.user.sleepModeEnabled
   ) {
-    const snapshot = await getPaperPerformanceSnapshot(db, userState.user.id);
+    const snapshot = await getPaperPerformanceSnapshot(
+      db,
+      userState.user.id,
+      paperTradingSettings.initialPaperCashKrw,
+    );
     await telegramClient.sendMessage(
       Number(userState.user.telegramChatId),
       buildExecutionSummary({
@@ -241,9 +270,10 @@ async function executePaperDecision(
     account: Awaited<ReturnType<typeof ensurePaperAccountByUserId>>;
     position: Awaited<ReturnType<typeof getPaperPositionSnapshotByUserAsset>>;
     decision: ReturnType<typeof decidePaperTrade>;
+    settings: PaperTradingSettings;
   },
 ): Promise<PaperExecutionResult> {
-  const { account, position, asset, market, decision } = params;
+  const { account, position, asset, market, decision, settings } = params;
 
   if (decision.action === "HOLD") {
     if (position) {
@@ -279,15 +309,18 @@ async function executePaperDecision(
           calculateBuyQuantity(
             decision.targetCashToUse,
             account.cashBalance,
-            getPaperBuyFillPrice(decision.referencePrice),
+            getPaperBuyFillPrice(decision.referencePrice, settings),
+            settings,
           ),
           decision.referencePrice,
+          settings,
         )
       : calculateSellFill(
           decision.action,
           calculateSellQuantity(position?.quantity ?? 0, decision.targetQuantityFraction ?? 0),
           decision.referencePrice,
           position?.averageEntryPrice ?? 0,
+          settings,
         );
 
   if (!fill) {

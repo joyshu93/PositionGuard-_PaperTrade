@@ -53,7 +53,7 @@ export function decidePaperTrade(context: PaperTradingContext): PaperTradingDeci
           "Invalidation is still clear.",
           "No chase-buy condition is active.",
         ],
-        targetCashToUse: getDefaultTargetCash("ENTRY", cashBalance),
+        targetCashToUse: getDefaultTargetCash("ENTRY", cashBalance, context.settings),
         targetQuantityFraction: null,
         referencePrice: analysis.currentPrice,
         diagnostics,
@@ -103,15 +103,15 @@ export function decidePaperTrade(context: PaperTradingContext): PaperTradingDeci
     return {
       action: "REDUCE",
       summary: `${context.asset} paper reduction is allowed because structure is weakening.`,
-      reasons: [
-        `Regime is ${analysis.regime}.`,
-        "Weakness is confirmed enough to reduce exposure conservatively.",
-        "Invalidation-first rotation is preferred over revenge holding.",
-      ],
-      targetCashToUse: 0,
-      targetQuantityFraction: getDefaultReduceFraction(),
-      referencePrice: analysis.currentPrice,
-      diagnostics,
+        reasons: [
+          `Regime is ${analysis.regime}.`,
+          "Weakness is confirmed enough to reduce exposure conservatively.",
+          "Invalidation-first rotation is preferred over revenge holding.",
+        ],
+        targetCashToUse: 0,
+        targetQuantityFraction: getDefaultReduceFraction(context.settings),
+        referencePrice: analysis.currentPrice,
+        diagnostics,
     };
   }
 
@@ -129,18 +129,18 @@ export function decidePaperTrade(context: PaperTradingContext): PaperTradingDeci
     return {
       action: "ADD",
       summary: `${context.asset} paper add is allowed by staged pullback or reclaim structure.`,
-      reasons: [
-        `Regime is ${analysis.regime}.`,
+        reasons: [
+          `Regime is ${analysis.regime}.`,
         analysis.pullbackZone
           ? "Current location is a staged pullback zone."
           : "Reclaim structure remains intact.",
         "Cash reserve is still available.",
         "No chase-buy condition is active.",
-      ],
-      targetCashToUse: getDefaultTargetCash("ADD", cashBalance),
-      targetQuantityFraction: null,
-      referencePrice: analysis.currentPrice,
-      diagnostics,
+        ],
+        targetCashToUse: getDefaultTargetCash("ADD", cashBalance, context.settings),
+        targetQuantityFraction: null,
+        referencePrice: analysis.currentPrice,
+        diagnostics,
     };
   }
 

@@ -16,6 +16,7 @@ At this stage the repository may implement:
 - internal simulated fill logic
 - persistence for paper trades, equity, and strategy decisions
 - concise Telegram reporting for simulated executions and cumulative performance
+- global paper-trading settings resolution with explicit defaults and optional env overrides
 
 At this stage the repository must not implement:
 
@@ -118,6 +119,7 @@ Execution remains internal only.
 - `REDUCE` and `EXIT` simulate sell fills
 - `HOLD` produces no trade row
 - fee and slippage assumptions must stay explicit in code constants
+- fee, slippage, sizing, and minimum trade assumptions must stay explicit in the paper-trading configuration layer
 - cash must never go negative
 - quantity must never go negative
 
@@ -138,6 +140,9 @@ User-facing reporting must be explicit that execution is simulated.
 - `/status` shows current paper cash, BTC/ETH positions, average entry, and unrealized pnl
 - `/pnl` shows realized pnl, current equity, cumulative return, and win rate when available
 - `/history` shows recent simulated trades
+- `/decision` shows the latest persisted BTC and ETH decision summaries
+- `/daily` shows KST-day paper-trading activity
+- `/settings` shows active global paper-trading settings
 - execution reports must say paper fill or simulated fill and must never imply broker connectivity
 
 ## Design Constraints

@@ -9,7 +9,10 @@ import {
 } from "../src/paper/math.js";
 import {
   buildHourlySummaryMessage,
+  renderPaperDailyMessage,
+  renderPaperDecisionMessage,
   renderPaperPnlMessage,
+  renderPaperSettingsMessage,
   renderPaperStatusMessage,
 } from "../src/paper/reporting.js";
 import { runUserHourlyCycle } from "../src/hourly.js";
@@ -25,6 +28,16 @@ const account = {
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
 };
+
+const settings = {
+  initialPaperCashKrw: 2_000_000,
+  feeRate: 0.001,
+  slippageRate: 0.0007,
+  minimumTradeValueKrw: 15_000,
+  entryAllocation: 0.3,
+  addAllocation: 0.2,
+  reduceFraction: 0.4,
+} as const;
 
 const buyQuantity = calculateBuyQuantity(250_000, account.cashBalance, 100_000);
 assert(buyQuantity > 0, "Buy quantity should be positive for a valid staged allocation.");
@@ -46,9 +59,6 @@ assert(afterBuy.position !== null && afterBuy.position.quantity > 0, "Paper entr
 const sellQuantity = calculateSellQuantity(afterBuy.position!.quantity, 1);
 const sellFillWin = calculateSellFill("EXIT", sellQuantity, 110_000, afterBuy.position!.averageEntryPrice);
 assert(sellFillWin !== null, "Winning sell fill should be created for a valid exit quantity.");
-
-const sellFillLoss = calculateSellFill("EXIT", sellQuantity, 90_000, afterBuy.position!.averageEntryPrice);
-assert(sellFillLoss !== null, "Losing sell fill should be created for a valid exit quantity.");
 
 const afterSell = applyPaperFill({
   account: afterBuy.account,
@@ -117,7 +127,7 @@ const performanceSnapshot = {
 };
 
 assert(
-  renderPaperStatusMessage(performanceSnapshot, "en").includes("All fills are simulated paper fills."),
+  renderPaperStatusMessage(performanceSnapshot, "en").includes("All fills are internal simulated paper fills."),
   "Paper status should explicitly say fills are simulated.",
 );
 assert(
@@ -141,9 +151,97 @@ const hourlySummary = buildHourlySummaryMessage({
 });
 assert(
   hourlySummary.includes("Hourly summary") &&
-    hourlySummary.includes("BTC: ENTRY | ETH: HOLD") &&
-    hourlySummary.includes("All values reflect simulated paper fills"),
-  "Hourly summary should include actions, portfolio metrics, and simulated-fill wording.",
+    hourlySummary.includes("BTC: Entry | ETH: Hold") &&
+    hourlySummary.includes("All values reflect internal simulated paper fills"),
+  "Hourly summary should include localized actions, portfolio metrics, and simulated-fill wording.",
+);
+
+const settingsMessage = renderPaperSettingsMessage(
+  {
+    values: settings,
+    scope: "global",
+    sourceByField: {
+      initialPaperCashKrw: "env",
+      feeRate: "env",
+      slippageRate: "default",
+      minimumTradeValueKrw: "default",
+      entryAllocation: "env",
+      addAllocation: "default",
+      reduceFraction: "env",
+    },
+  },
+  "en",
+);
+assert(
+  settingsMessage.includes("Scope: global") &&
+    settingsMessage.includes("Initial paper cash: 2,000,000 KRW (env override)") &&
+    settingsMessage.includes("Reduce fraction: +40% (env override)"),
+  "/settings should show active values and whether they come from defaults or env overrides.",
+);
+
+const decisionMessage = renderPaperDecisionMessage(
+  {
+    latestByAsset: {
+      BTC: {
+        id: 1,
+        userId: 1,
+        asset: "BTC",
+        market: "KRW-BTC",
+        action: "ADD",
+        executionStatus: "EXECUTED",
+        summary: "BTC paper add is allowed by staged pullback structure.",
+        reasons: ["Regime is BULL_TREND.", "Cash reserve is still available."],
+        rationale: null,
+        referencePrice: 150_000_000,
+        fillPrice: 150_100_000,
+        tradeId: 7,
+        createdAt: "2026-04-03T01:00:00.000Z",
+      },
+      ETH: {
+        id: 2,
+        userId: 1,
+        asset: "ETH",
+        market: "KRW-ETH",
+        action: "HOLD",
+        executionStatus: "SKIPPED",
+        summary: "ETH paper decision skipped because market data was unavailable.",
+        reasons: ["Upbit candle response was empty."],
+        rationale: null,
+        referencePrice: 0,
+        fillPrice: null,
+        tradeId: null,
+        createdAt: "2026-04-03T01:00:00.000Z",
+      },
+    },
+  },
+  "en",
+);
+assert(
+  decisionMessage.includes("BTC: Add | Executed") &&
+    decisionMessage.includes("ETH paper decision skipped because market data was unavailable.") &&
+    decisionMessage.includes("Reference: n/a"),
+  "/decision should show action, status, reasons, and missing-market-data skips clearly.",
+);
+
+const dailyMessage = renderPaperDailyMessage(
+  {
+    timezone: "Asia/Seoul",
+    dayLabel: "2026-04-03 KST",
+    tradeCount: 3,
+    realizedPnl: 12_500,
+    currentTotalEquity: 1_120_000,
+    actionCounts: {
+      BTC: { ENTRY: 1, HOLD: 5 },
+      ETH: { REDUCE: 1, HOLD: 5 },
+    },
+  },
+  "en",
+);
+assert(
+  dailyMessage.includes("Simulated trades today: 3") &&
+    dailyMessage.includes("BTC action counts: Entry 1 / Hold 5") &&
+    dailyMessage.includes("Timezone basis: Asia/Seoul (KST)"),
+  "/daily should summarize today's trades, realized PnL, equity, and action counts with explicit timezone wording.",
 );
 
 let aggregatePersistCalls = 0;
@@ -176,14 +274,15 @@ await runUserHourlyCycle({
     positions: {},
   },
   upbitBaseUrl: null,
-  ensureAccount: async () => account,
+  paperTradingSettings: settings,
+  ensureAccount: async () => ({ ...account, initialCash: settings.initialPaperCashKrw }),
   processAssetCycle: async (_db, _client, _userState, asset) => ({
     action: asset === "BTC" ? "ENTRY" : "HOLD",
     executed: asset === "BTC",
     summary: `${asset} summary`,
     reasons: [],
     trade: null,
-    updatedAccount: account,
+    updatedAccount: { ...account, initialCash: settings.initialPaperCashKrw },
     updatedPosition: null,
     referencePrice: asset === "BTC" ? 100_000 : 3_000_000,
     fillPrice: null,

@@ -126,3 +126,34 @@ export async function getCumulativeClosedTradeStatsForUser(
     realizedPnl: row?.realized_pnl ?? 0,
   };
 }
+
+export async function getPaperTradeStatsForUserBetween(
+  db: D1DatabaseLike,
+  userId: number,
+  startIso: string,
+  endIso: string,
+): Promise<{
+  tradeCount: number;
+  realizedPnl: number;
+}> {
+  const row = await db
+    .prepare(
+      `SELECT
+         COUNT(*) AS trade_count,
+         COALESCE(SUM(CASE WHEN side = 'SELL' THEN realized_pnl ELSE 0 END), 0) AS realized_pnl
+       FROM paper_trades
+       WHERE user_id = ?
+         AND created_at >= ?
+         AND created_at < ?`,
+    )
+    .bind(userId, startIso, endIso)
+    .first<{
+      trade_count: number | null;
+      realized_pnl: number | null;
+    }>();
+
+  return {
+    tradeCount: row?.trade_count ?? 0,
+    realizedPnl: row?.realized_pnl ?? 0,
+  };
+}

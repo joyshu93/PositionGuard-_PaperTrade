@@ -1,3 +1,9 @@
+import {
+  resolvePaperTradingSettings,
+  type PaperTradingSettingEnv,
+  type ResolvedPaperTradingSettings,
+} from "./paper/config.js";
+
 export interface Env {
   DB: D1Database;
   TELEGRAM_BOT_TOKEN: string;
@@ -6,6 +12,7 @@ export interface Env {
   HEALTH_PATH?: string;
   UPBIT_BASE_URL?: string;
 }
+export interface Env extends PaperTradingSettingEnv {}
 
 export const DEFAULT_HEALTH_PATH = "/health";
 export const DEFAULT_TELEGRAM_WEBHOOK_PATH = "/telegram/webhook";
@@ -17,6 +24,7 @@ export interface RuntimeConfig {
   telegramWebhookPath: string;
   healthPath: string;
   upbitBaseUrl: string | null;
+  paperTradingSettings: ResolvedPaperTradingSettings;
 }
 
 export function createRuntimeConfig(env: Env): RuntimeConfig {
@@ -57,6 +65,7 @@ export function createRuntimeConfig(env: Env): RuntimeConfig {
     telegramWebhookPath,
     healthPath,
     upbitBaseUrl,
+    paperTradingSettings: resolvePaperTradingSettings(env),
   };
 }
 

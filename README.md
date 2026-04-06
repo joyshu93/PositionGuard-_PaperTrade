@@ -39,6 +39,9 @@ The first paper-trading iteration includes:
   - `/positions`
   - `/pnl`
   - `/history`
+  - `/decision`
+  - `/daily`
+  - `/settings`
 - Telegram execution summaries for simulated fills
 - one concise hourly summary message per user after each hourly cycle
 
@@ -94,15 +97,26 @@ On each hourly run:
 - `/positions`
 - `/pnl`
 - `/history`
+- `/decision`
+- `/daily`
+- `/settings`
 - `/language <ko|en>`
 - `/sleep on`
 - `/sleep off`
 
 The previous manual `/setcash` and `/setposition` workflow is intentionally not used in this paper-trading version.
 
-## Explicit Assumptions
+## Settings
 
-Paper execution assumptions are explicit code constants in `src/paper/constants.ts`:
+Paper-trading settings are resolved through `src/paper/config.ts`.
+
+Current support is global-only:
+
+- default values live in code
+- optional environment variables can override them for the whole deployment
+- per-user write commands are intentionally not implemented yet
+
+Active settings are visible in `/settings`:
 
 - initial paper cash
 - fee rate
@@ -111,6 +125,11 @@ Paper execution assumptions are explicit code constants in `src/paper/constants.
 - entry allocation
 - add allocation
 - reduce fraction
+
+Current source precedence:
+
+1. valid environment variable override
+2. explicit in-code default
 
 ## Reporting Semantics
 
@@ -127,6 +146,7 @@ Paper execution assumptions are explicit code constants in `src/paper/constants.
 Cumulative stats are calculated from persisted trade history as follows:
 
 - closed trades = all persisted `paper_trades` rows where `side = 'SELL'`
+- in the current implementation, a "closed trade" means a persisted sell-side simulated fill created by `REDUCE` or `EXIT`
 - winning closed trades = closed trades where `realized_pnl > 0`
 - cumulative closed-trade win rate = `winning closed trades / total closed trades`
 - cumulative realized PnL from trades = `SUM(realized_pnl)` across all closed trades
@@ -135,6 +155,31 @@ Cumulative stats are calculated from persisted trade history as follows:
 - cumulative return = `(current equity - initial cash) / initial cash`
 
 `/history` is intentionally recent-only and is labeled that way. It is not the basis for cumulative win rate.
+
+`/decision` shows the latest persisted BTC and ETH decision rows with:
+
+- localized action label
+- execution status
+- summary
+- top reasons
+- reference price
+
+If market data was unavailable and the hourly cycle skipped a decision, `/decision` should make that clear from the stored summary and execution status.
+
+`/daily` summarizes the current KST trading day using persisted state:
+
+- number of simulated trades today
+- realized PnL today
+- current total equity
+- BTC action counts today
+- ETH action counts today
+
+Hourly reporting behavior:
+
+- execution alerts are sent only when a simulated fill is executed
+- one hourly summary is sent after BTC and ETH are both processed
+- hourly summary and execution alerts respect sleep mode
+- action labels are localized for both English and Korean output
 
 ## Local Setup
 

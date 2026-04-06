@@ -7,16 +7,22 @@ import {
 import { runHourlyCycle } from "./hourly.js";
 import { handleTelegramWebhook } from "./telegram.js";
 import {
+  buildPaperTradingSettingsView,
   ensureTelegramUser,
+  getLatestPaperDecisionSnapshot,
+  getPaperDailySummary,
   getPaperPerformanceSnapshot,
   listRecentPaperTrades,
   setLocaleByTelegramUserId,
   setSleepModeByTelegramUserId,
 } from "./db/repositories.js";
 import {
+  renderPaperDailyMessage,
+  renderPaperDecisionMessage,
   renderPaperHistoryMessage,
   renderPaperPnlMessage,
   renderPaperPositionsMessage,
+  renderPaperSettingsMessage,
   renderPaperStatusMessage,
 } from "./paper/reporting.js";
 
@@ -80,7 +86,7 @@ async function handleFetch(
             const user = await ensureTelegramUser(env.DB, {
               telegramUserId: String(telegramUserId),
               telegramChatId: String(telegramUserId),
-            });
+            }, runtime.paperTradingSettings.values.initialPaperCashKrw);
             return {
               telegramUserId,
               isSleeping: user.sleepModeEnabled,
@@ -97,7 +103,7 @@ async function handleFetch(
               displayName: input.displayName ?? null,
               languageCode: input.languageCode ?? null,
               locale: input.preferredLocale ?? null,
-            });
+            }, runtime.paperTradingSettings.values.initialPaperCashKrw);
             return user.locale ?? null;
           },
           async setCash() {
@@ -119,33 +125,83 @@ async function handleFetch(
             const user = await ensureTelegramUser(env.DB, {
               telegramUserId: String(telegramUserId),
               telegramChatId: String(telegramUserId),
-            });
-            const snapshot = await getPaperPerformanceSnapshot(env.DB, user.id);
+            }, runtime.paperTradingSettings.values.initialPaperCashKrw);
+            const snapshot = await getPaperPerformanceSnapshot(
+              env.DB,
+              user.id,
+              runtime.paperTradingSettings.values.initialPaperCashKrw,
+            );
             return renderPaperStatusMessage(snapshot, locale);
           },
           async getPositions(telegramUserId, locale) {
             const user = await ensureTelegramUser(env.DB, {
               telegramUserId: String(telegramUserId),
               telegramChatId: String(telegramUserId),
-            });
-            const snapshot = await getPaperPerformanceSnapshot(env.DB, user.id);
+            }, runtime.paperTradingSettings.values.initialPaperCashKrw);
+            const snapshot = await getPaperPerformanceSnapshot(
+              env.DB,
+              user.id,
+              runtime.paperTradingSettings.values.initialPaperCashKrw,
+            );
             return renderPaperPositionsMessage(snapshot, locale);
           },
           async getPnl(telegramUserId, locale) {
             const user = await ensureTelegramUser(env.DB, {
               telegramUserId: String(telegramUserId),
               telegramChatId: String(telegramUserId),
-            });
-            const snapshot = await getPaperPerformanceSnapshot(env.DB, user.id);
+            }, runtime.paperTradingSettings.values.initialPaperCashKrw);
+            const snapshot = await getPaperPerformanceSnapshot(
+              env.DB,
+              user.id,
+              runtime.paperTradingSettings.values.initialPaperCashKrw,
+            );
             return renderPaperPnlMessage(snapshot, locale);
           },
           async getHistory(telegramUserId, locale) {
             const user = await ensureTelegramUser(env.DB, {
               telegramUserId: String(telegramUserId),
               telegramChatId: String(telegramUserId),
-            });
+            }, runtime.paperTradingSettings.values.initialPaperCashKrw);
             const trades = await listRecentPaperTrades(env.DB, user.id, 8);
             return renderPaperHistoryMessage(trades, locale);
+          },
+          async getSettings(telegramUserId, locale) {
+            await ensureTelegramUser(env.DB, {
+              telegramUserId: String(telegramUserId),
+              telegramChatId: String(telegramUserId),
+            }, runtime.paperTradingSettings.values.initialPaperCashKrw);
+            return renderPaperSettingsMessage(
+              buildPaperTradingSettingsView(
+                runtime.paperTradingSettings.values,
+                runtime.paperTradingSettings.sourceByField,
+              ),
+              locale,
+            );
+          },
+          async getDecision(telegramUserId, locale) {
+            const user = await ensureTelegramUser(env.DB, {
+              telegramUserId: String(telegramUserId),
+              telegramChatId: String(telegramUserId),
+            }, runtime.paperTradingSettings.values.initialPaperCashKrw);
+            const snapshot = await getLatestPaperDecisionSnapshot(env.DB, user.id);
+            return renderPaperDecisionMessage(snapshot, locale);
+          },
+          async getDaily(telegramUserId, locale) {
+            const user = await ensureTelegramUser(env.DB, {
+              telegramUserId: String(telegramUserId),
+              telegramChatId: String(telegramUserId),
+            }, runtime.paperTradingSettings.values.initialPaperCashKrw);
+            const performance = await getPaperPerformanceSnapshot(
+              env.DB,
+              user.id,
+              runtime.paperTradingSettings.values.initialPaperCashKrw,
+            );
+            const dailySummary = await getPaperDailySummary(
+              env.DB,
+              user.id,
+              performance.totalEquity,
+            );
+            return renderPaperDailyMessage(dailySummary, locale);
           },
         },
       },
