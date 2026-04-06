@@ -6,6 +6,8 @@ export interface PaperTradingSettingEnv {
   PAPER_ENTRY_ALLOCATION?: string;
   PAPER_ADD_ALLOCATION?: string;
   PAPER_REDUCE_FRACTION?: string;
+  PAPER_PER_ASSET_MAX_ALLOCATION?: string;
+  PAPER_TOTAL_PORTFOLIO_MAX_EXPOSURE?: string;
 }
 
 export interface PaperTradingSettings {
@@ -16,6 +18,8 @@ export interface PaperTradingSettings {
   entryAllocation: number;
   addAllocation: number;
   reduceFraction: number;
+  perAssetMaxAllocation: number;
+  totalPortfolioMaxExposure: number;
 }
 
 export type PaperTradingSettingKey = keyof PaperTradingSettings;
@@ -35,6 +39,8 @@ export const DEFAULT_PAPER_TRADING_SETTINGS: PaperTradingSettings = {
   entryAllocation: 0.25,
   addAllocation: 0.15,
   reduceFraction: 0.33,
+  perAssetMaxAllocation: 0.45,
+  totalPortfolioMaxExposure: 0.75,
 };
 
 export function resolvePaperTradingSettings(
@@ -74,6 +80,16 @@ export function resolvePaperTradingSettings(
     reduceFraction: resolveNumericSetting(
       env?.PAPER_REDUCE_FRACTION,
       DEFAULT_PAPER_TRADING_SETTINGS.reduceFraction,
+      { minExclusive: 0, maxInclusive: 1 },
+    ),
+    perAssetMaxAllocation: resolveNumericSetting(
+      env?.PAPER_PER_ASSET_MAX_ALLOCATION,
+      DEFAULT_PAPER_TRADING_SETTINGS.perAssetMaxAllocation,
+      { minExclusive: 0, maxInclusive: 1 },
+    ),
+    totalPortfolioMaxExposure: resolveNumericSetting(
+      env?.PAPER_TOTAL_PORTFOLIO_MAX_EXPOSURE,
+      DEFAULT_PAPER_TRADING_SETTINGS.totalPortfolioMaxExposure,
       { minExclusive: 0, maxInclusive: 1 },
     ),
   };
@@ -127,6 +143,20 @@ export function resolvePaperTradingSettings(
         !hasText(env?.PAPER_REDUCE_FRACTION)
           ? "default"
           : hasValidNumber(env?.PAPER_REDUCE_FRACTION, { minExclusive: 0, maxInclusive: 1 })
+            ? "env"
+            : "default",
+      perAssetMaxAllocation:
+        values.perAssetMaxAllocation === DEFAULT_PAPER_TRADING_SETTINGS.perAssetMaxAllocation &&
+        !hasText(env?.PAPER_PER_ASSET_MAX_ALLOCATION)
+          ? "default"
+          : hasValidNumber(env?.PAPER_PER_ASSET_MAX_ALLOCATION, { minExclusive: 0, maxInclusive: 1 })
+            ? "env"
+            : "default",
+      totalPortfolioMaxExposure:
+        values.totalPortfolioMaxExposure === DEFAULT_PAPER_TRADING_SETTINGS.totalPortfolioMaxExposure &&
+        !hasText(env?.PAPER_TOTAL_PORTFOLIO_MAX_EXPOSURE)
+          ? "default"
+          : hasValidNumber(env?.PAPER_TOTAL_PORTFOLIO_MAX_EXPOSURE, { minExclusive: 0, maxInclusive: 1 })
             ? "env"
             : "default",
     },

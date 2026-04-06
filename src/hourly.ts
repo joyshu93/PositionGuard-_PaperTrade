@@ -16,8 +16,11 @@ import {
   createStrategyDecisionRecord,
   ensurePaperAccountByUserId,
   ensureTelegramUser,
+  getLatestExitTradeByUserAsset,
+  getLatestStrategyDecisionByUserAsset,
   getPaperPerformanceSnapshot,
   getPaperPositionSnapshotByUserAsset,
+  listPaperPositionSnapshotsForUser,
   listUsersForHourlyRun,
   savePaperAccountSnapshot,
   savePaperPositionSnapshot,
@@ -26,6 +29,7 @@ import { buildExecutionSummary, buildHourlySummaryMessage } from "./paper/report
 import { decidePaperTrade } from "./paper/strategy.js";
 import {
   applyPaperFill,
+  calculatePositionMarketValue,
   calculateBuyFill,
   calculateBuyQuantity,
   calculateSellFill,
@@ -169,6 +173,7 @@ export async function processPaperTradingCycle(
     return {
       action: skipped.action,
       executed: false,
+      executionDisposition: "SKIPPED",
       summary: skipped.summary,
       reasons: skipped.reasons,
       trade: null,
@@ -191,6 +196,20 @@ export async function processPaperTradingCycle(
     paperTradingSettings.initialPaperCashKrw,
   );
   const position = await getPaperPositionSnapshotByUserAsset(db, userState.user.id, asset);
+  const [allPositions, latestDecision, latestExitTrade] = await Promise.all([
+    listPaperPositionSnapshotsForUser(db, userState.user.id),
+    getLatestStrategyDecisionByUserAsset(db, userState.user.id, asset),
+    getLatestExitTradeByUserAsset(db, userState.user.id, asset),
+  ]);
+  const currentPrices = {
+    BTC: asset === "BTC" ? marketResult.snapshot.ticker.tradePrice : allPositions.BTC?.lastMarkPrice ?? null,
+    ETH: asset === "ETH" ? marketResult.snapshot.ticker.tradePrice : allPositions.ETH?.lastMarkPrice ?? null,
+  };
+  const totalExposureValue =
+    calculatePositionMarketValue(allPositions.BTC, currentPrices.BTC) +
+    calculatePositionMarketValue(allPositions.ETH, currentPrices.ETH);
+  const assetMarketValue = calculatePositionMarketValue(position, marketResult.snapshot.ticker.tradePrice);
+  const nowIso = new Date().toISOString();
   const context = {
     user: {
       id: userState.user.id,
@@ -203,8 +222,29 @@ export async function processPaperTradingCycle(
     market,
     account,
     position,
+    portfolio: {
+      totalEquity: account.cashBalance + totalExposureValue,
+      assetMarketValue,
+      totalExposureValue,
+      assetExposureRatio:
+        account.cashBalance + totalExposureValue > 0
+          ? assetMarketValue / (account.cashBalance + totalExposureValue)
+          : 0,
+      totalExposureRatio:
+        account.cashBalance + totalExposureValue > 0
+          ? totalExposureValue / (account.cashBalance + totalExposureValue)
+          : 0,
+    },
+    latestDecision,
+    recentExit: {
+      tradeId: latestExitTrade?.id ?? null,
+      createdAt: latestExitTrade?.createdAt ?? null,
+      hoursSinceExit: latestExitTrade
+        ? Math.max(0, (new Date(nowIso).getTime() - new Date(latestExitTrade.createdAt).getTime()) / 3_600_000)
+        : null,
+    },
     marketSnapshot: marketResult.snapshot,
-    generatedAt: new Date().toISOString(),
+    generatedAt: nowIso,
     settings: paperTradingSettings,
   };
   const decision = decidePaperTrade(context);
@@ -226,7 +266,12 @@ export async function processPaperTradingCycle(
     executionStatus: execution.executed ? "EXECUTED" : "SKIPPED",
     summary: execution.summary,
     reasons: execution.reasons,
-    rationale: decision.diagnostics,
+    rationale: {
+      diagnostics: decision.diagnostics,
+      executionDisposition: execution.executionDisposition,
+      signalQuality: decision.signalQuality,
+      exposureGuardrails: decision.exposureGuardrails,
+    },
     referencePrice: execution.referencePrice,
     fillPrice: execution.fillPrice,
     tradeId: execution.trade?.id ?? null,
@@ -286,6 +331,35 @@ async function executePaperDecision(
     return {
       action: "HOLD",
       executed: false,
+      executionDisposition: "SKIPPED",
+      summary: decision.summary,
+      reasons: decision.reasons,
+      trade: null,
+      updatedAccount: account,
+      updatedPosition: position
+        ? {
+            ...position,
+            lastMarkPrice: decision.referencePrice,
+          }
+        : null,
+      referencePrice: decision.referencePrice,
+      fillPrice: null,
+      latestMarketPrice: decision.referencePrice,
+    };
+  }
+
+  if (decision.executionDisposition === "DEFERRED_CONFIRMATION") {
+    if (position) {
+      await savePaperPositionSnapshot(db, {
+        ...position,
+        lastMarkPrice: decision.referencePrice,
+      });
+    }
+
+    return {
+      action: decision.action,
+      executed: false,
+      executionDisposition: "DEFERRED_CONFIRMATION",
       summary: decision.summary,
       reasons: decision.reasons,
       trade: null,
@@ -327,6 +401,7 @@ async function executePaperDecision(
     return {
       action: decision.action,
       executed: false,
+      executionDisposition: "SKIPPED",
       summary: `${decision.summary} Execution was skipped because quantity was below the paper-trade threshold.`,
       reasons: [...decision.reasons, "Trade size was too small after fees and slippage assumptions."],
       trade: null,
@@ -376,6 +451,7 @@ async function executePaperDecision(
   return {
     action: decision.action,
     executed: true,
+    executionDisposition: decision.executionDisposition,
     summary: decision.summary,
     reasons: decision.reasons,
     trade,

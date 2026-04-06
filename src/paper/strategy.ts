@@ -1,20 +1,47 @@
 import type {
+  DecisionExecutionDisposition,
   PaperTradingContext,
   PaperTradingDecision,
+  SignalQualityBucket,
 } from "../domain/types.js";
-import { analyzePositionStructure } from "../decision/market-structure.js";
 import {
-  getDefaultReduceFraction,
-  getDefaultTargetCash,
-} from "./math.js";
+  analyzePositionStructure,
+  type PositionStructureAnalysis,
+} from "../decision/market-structure.js";
+import { getDefaultReduceFraction, getDefaultTargetCash } from "./math.js";
+
+const ENTRY_STRONG_THRESHOLD = 8;
+const ENTRY_BORDERLINE_THRESHOLD = 6;
+const ADD_STRONG_THRESHOLD = 7;
+const ADD_BORDERLINE_THRESHOLD = 5;
+const REDUCE_THRESHOLD = 4;
+const HEALTHY_HOLD_REDUCE_THRESHOLD = 5;
+const RECENT_EXIT_PENALTY_HOURS = 24;
 
 export function decidePaperTrade(context: PaperTradingContext): PaperTradingDecision {
   const analysis = analyzePositionStructure(
     context.marketSnapshot,
     context.position?.averageEntryPrice ?? 0,
   );
+  return buildPaperTradeDecisionFromAnalysis(context, analysis);
+}
+
+export function buildPaperTradeDecisionFromAnalysis(
+  context: PaperTradingContext,
+  analysis: PositionStructureAnalysis,
+): PaperTradingDecision {
   const quantity = context.position?.quantity ?? 0;
   const cashBalance = context.account.cashBalance;
+  const bullishEvidence = countBullishEvidence(analysis);
+  const weaknessEvidence = countWeaknessEvidence(analysis);
+  const reentryPenaltyApplied =
+    quantity <= 0 &&
+    context.recentExit.hoursSinceExit !== null &&
+    context.recentExit.hoursSinceExit <= RECENT_EXIT_PENALTY_HOURS;
+  const reentryPenalty = reentryPenaltyApplied ? 1 : 0;
+
+  const bullishScore = computeBullishScore(analysis) - reentryPenalty;
+  const qualityBucket = toQualityBucket(bullishScore);
   const diagnostics = {
     regime: analysis.regime,
     riskLevel: analysis.riskLevel,
@@ -27,54 +54,10 @@ export function decidePaperTrade(context: PaperTradingContext): PaperTradingDeci
     currentPrice: analysis.currentPrice,
     cashBalance,
     positionQuantity: quantity,
+    bullishEvidenceCount: bullishEvidence,
+    weaknessEvidenceCount: weaknessEvidence,
   };
-
-  if (quantity <= 0) {
-    if (
-      cashBalance > 0 &&
-      analysis.invalidationState === "CLEAR" &&
-      !analysis.upperRangeChase &&
-      !analysis.breakdown1d &&
-      !analysis.breakdown4h &&
-      (analysis.pullbackZone || analysis.reclaimStructure || analysis.breakoutHoldStructure) &&
-      (analysis.regime === "BULL_TREND" ||
-        analysis.regime === "PULLBACK_IN_UPTREND" ||
-        analysis.regime === "EARLY_RECOVERY" ||
-        analysis.regime === "RECLAIM_ATTEMPT")
-    ) {
-      return {
-        action: "ENTRY",
-        summary: `${context.asset} paper entry is allowed by constructive structure.`,
-        reasons: [
-          `Regime is ${analysis.regime}.`,
-          analysis.pullbackZone
-            ? "Pullback zone is available."
-            : "Reclaim or breakout-hold structure is available.",
-          "Invalidation is still clear.",
-          "No chase-buy condition is active.",
-        ],
-        targetCashToUse: getDefaultTargetCash("ENTRY", cashBalance, context.settings),
-        targetQuantityFraction: null,
-        referencePrice: analysis.currentPrice,
-        diagnostics,
-      };
-    }
-
-    return {
-      action: "HOLD",
-      summary: `${context.asset} stays on hold because entry conditions are not conservative enough.`,
-      reasons: [
-        `Regime is ${analysis.regime}.`,
-        analysis.upperRangeChase
-          ? "Price is too extended for a no-chase entry."
-          : "Structure is not strong enough for a new paper entry.",
-      ],
-      targetCashToUse: 0,
-      targetQuantityFraction: null,
-      referencePrice: analysis.currentPrice,
-      diagnostics,
-    };
-  }
+  const exposureGuardrails = buildExposureGuardrails(context);
 
   if (
     analysis.invalidationState === "BROKEN" ||
@@ -87,73 +70,569 @@ export function decidePaperTrade(context: PaperTradingContext): PaperTradingDeci
       reasons: [
         `Regime is ${analysis.regime}.`,
         "Higher-timeframe support has broken or invalidation is already broken.",
-        "Survival first overrides hold-and-hope.",
+        "Invalidation-first exit remains immediate and unchanged.",
       ],
       targetCashToUse: 0,
       targetQuantityFraction: 1,
       referencePrice: analysis.currentPrice,
+      executionDisposition: "IMMEDIATE",
+      signalQuality: {
+        score: 0,
+        bucket: "LOW",
+        confirmationRequired: false,
+        confirmationSatisfied: false,
+        reentryPenaltyApplied,
+      },
+      exposureGuardrails,
       diagnostics,
     };
   }
 
-  if (
-    analysis.riskLevel === "ELEVATED" &&
-    (analysis.failedReclaim || analysis.bearishMomentumExpansion || analysis.regime === "WEAK_DOWNTREND")
-  ) {
-    return {
-      action: "REDUCE",
-      summary: `${context.asset} paper reduction is allowed because structure is weakening.`,
-        reasons: [
-          `Regime is ${analysis.regime}.`,
-          "Weakness is confirmed enough to reduce exposure conservatively.",
-          "Invalidation-first rotation is preferred over revenge holding.",
-        ],
-        targetCashToUse: 0,
-        targetQuantityFraction: getDefaultReduceFraction(context.settings),
-        referencePrice: analysis.currentPrice,
-        diagnostics,
-    };
+  if (quantity <= 0) {
+    return decideFlatPositionAction({
+      context,
+      analysis,
+      bullishScore,
+      qualityBucket,
+      reentryPenaltyApplied,
+      diagnostics,
+      exposureGuardrails,
+    });
   }
 
-  if (
-    cashBalance > 0 &&
-    analysis.invalidationState === "CLEAR" &&
-    !analysis.upperRangeChase &&
-    !analysis.breakdown1d &&
-    (analysis.pullbackZone || analysis.reclaimStructure) &&
-    (analysis.regime === "BULL_TREND" ||
-      analysis.regime === "PULLBACK_IN_UPTREND" ||
-      analysis.regime === "EARLY_RECOVERY" ||
-      analysis.regime === "RECLAIM_ATTEMPT")
-  ) {
-    return {
-      action: "ADD",
-      summary: `${context.asset} paper add is allowed by staged pullback or reclaim structure.`,
-        reasons: [
-          `Regime is ${analysis.regime}.`,
-        analysis.pullbackZone
-          ? "Current location is a staged pullback zone."
-          : "Reclaim structure remains intact.",
-        "Cash reserve is still available.",
-        "No chase-buy condition is active.",
-        ],
-        targetCashToUse: getDefaultTargetCash("ADD", cashBalance, context.settings),
-        targetQuantityFraction: null,
-        referencePrice: analysis.currentPrice,
-        diagnostics,
-    };
+  const reduceDecision = decideReduceAction({
+    context,
+    analysis,
+    weaknessEvidence,
+    diagnostics,
+    exposureGuardrails,
+    reentryPenaltyApplied,
+  });
+  if (reduceDecision) {
+    return reduceDecision;
   }
+
+  return decideAddOrHoldAction({
+    context,
+    analysis,
+    bullishScore,
+    qualityBucket,
+    reentryPenaltyApplied,
+    diagnostics,
+    exposureGuardrails,
+  });
+}
+
+function decideFlatPositionAction(input: {
+  context: PaperTradingContext;
+  analysis: PositionStructureAnalysis;
+  bullishScore: number;
+  qualityBucket: SignalQualityBucket;
+  reentryPenaltyApplied: boolean;
+  diagnostics: PaperTradingDecision["diagnostics"];
+  exposureGuardrails: PaperTradingDecision["exposureGuardrails"];
+}): PaperTradingDecision {
+  const { context, analysis, bullishScore, qualityBucket, reentryPenaltyApplied, diagnostics, exposureGuardrails } = input;
+
+  if (!isConstructiveBullishCandidate(analysis)) {
+    return holdDecision(
+      context,
+      analysis,
+      [
+        `Regime is ${analysis.regime}.`,
+        analysis.upperRangeChase
+          ? "Price is too extended for a no-chase entry."
+          : "Bullish structure is not strong enough to justify a fresh entry.",
+      ],
+      diagnostics,
+      exposureGuardrails,
+      bullishScore,
+      qualityBucket,
+      reentryPenaltyApplied,
+    );
+  }
+
+  if (!hasBullishRiskCapacity(context, exposureGuardrails)) {
+    return holdDecision(
+      context,
+      analysis,
+      [
+        `Regime is ${analysis.regime}.`,
+        "Exposure guardrails leave no room for additional risk right now.",
+      ],
+      diagnostics,
+      exposureGuardrails,
+      bullishScore,
+      qualityBucket,
+      reentryPenaltyApplied,
+    );
+  }
+
+  if (bullishScore >= ENTRY_STRONG_THRESHOLD) {
+    return bullishDecision({
+      context,
+      analysis,
+      action: "ENTRY",
+      executionDisposition: "IMMEDIATE",
+      qualityBucket,
+      bullishScore,
+      reentryPenaltyApplied,
+      confirmationSatisfied: false,
+      allocationMultiplier: 1,
+      diagnostics,
+      exposureGuardrails,
+      extraReasons: [
+        `Regime is ${analysis.regime}.`,
+        "Constructive structure is strong enough to act immediately.",
+      ],
+    });
+  }
+
+  if (bullishScore >= ENTRY_BORDERLINE_THRESHOLD) {
+    const confirmationSatisfied = hasPendingBullishConfirmation(context, "ENTRY");
+    return bullishDecision({
+      context,
+      analysis,
+      action: "ENTRY",
+      executionDisposition: confirmationSatisfied ? "EXECUTED_AFTER_CONFIRMATION" : "DEFERRED_CONFIRMATION",
+      qualityBucket,
+      bullishScore,
+      reentryPenaltyApplied,
+      confirmationSatisfied,
+      allocationMultiplier: confirmationSatisfied ? 0.65 : 0.5,
+      diagnostics,
+      exposureGuardrails,
+      extraReasons: confirmationSatisfied
+        ? [
+            `Regime is ${analysis.regime}.`,
+            "Borderline bullish structure held for one additional hourly confirmation.",
+          ]
+        : [
+            `Regime is ${analysis.regime}.`,
+            "Bullish structure is valid but borderline, so one additional hourly confirmation is required.",
+          ],
+    });
+  }
+
+  return holdDecision(
+    context,
+    analysis,
+    [
+      `Regime is ${analysis.regime}.`,
+      reentryPenaltyApplied
+        ? "Recent exit caution slightly raised the entry threshold and the recovery quality is not strong enough yet."
+        : "Bullish score did not clear the entry hysteresis threshold.",
+    ],
+    diagnostics,
+    exposureGuardrails,
+    bullishScore,
+    qualityBucket,
+    reentryPenaltyApplied,
+  );
+}
+
+function decideAddOrHoldAction(input: {
+  context: PaperTradingContext;
+  analysis: PositionStructureAnalysis;
+  bullishScore: number;
+  qualityBucket: SignalQualityBucket;
+  reentryPenaltyApplied: boolean;
+  diagnostics: PaperTradingDecision["diagnostics"];
+  exposureGuardrails: PaperTradingDecision["exposureGuardrails"];
+}): PaperTradingDecision {
+  const { context, analysis, bullishScore, qualityBucket, reentryPenaltyApplied, diagnostics, exposureGuardrails } = input;
+
+  if (!isConstructiveBullishCandidate(analysis)) {
+    return holdDecision(
+      context,
+      analysis,
+      [
+        `Regime is ${analysis.regime}.`,
+        "Existing position remains valid, but bullish quality is not strong enough for an add.",
+      ],
+      diagnostics,
+      exposureGuardrails,
+      bullishScore,
+      qualityBucket,
+      reentryPenaltyApplied,
+    );
+  }
+
+  if (!hasBullishRiskCapacity(context, exposureGuardrails)) {
+    return holdDecision(
+      context,
+      analysis,
+      [
+        `Regime is ${analysis.regime}.`,
+        "Exposure guardrails leave no room for an additional add.",
+      ],
+      diagnostics,
+      exposureGuardrails,
+      bullishScore,
+      qualityBucket,
+      reentryPenaltyApplied,
+    );
+  }
+
+  if (bullishScore >= ADD_STRONG_THRESHOLD) {
+    return bullishDecision({
+      context,
+      analysis,
+      action: "ADD",
+      executionDisposition: "IMMEDIATE",
+      qualityBucket,
+      bullishScore,
+      reentryPenaltyApplied,
+      confirmationSatisfied: false,
+      allocationMultiplier: 0.9,
+      diagnostics,
+      exposureGuardrails,
+      extraReasons: [
+        `Regime is ${analysis.regime}.`,
+        "Constructive pullback or reclaim quality is strong enough for an immediate staged add.",
+      ],
+    });
+  }
+
+  if (bullishScore >= ADD_BORDERLINE_THRESHOLD) {
+    const confirmationSatisfied = hasPendingBullishConfirmation(context, "ADD");
+    return bullishDecision({
+      context,
+      analysis,
+      action: "ADD",
+      executionDisposition: confirmationSatisfied ? "EXECUTED_AFTER_CONFIRMATION" : "DEFERRED_CONFIRMATION",
+      qualityBucket,
+      bullishScore,
+      reentryPenaltyApplied,
+      confirmationSatisfied,
+      allocationMultiplier: confirmationSatisfied ? 0.55 : 0.4,
+      diagnostics,
+      exposureGuardrails,
+      extraReasons: confirmationSatisfied
+        ? [
+            `Regime is ${analysis.regime}.`,
+            "Borderline add setup stayed constructive for one more hourly confirmation.",
+          ]
+        : [
+            `Regime is ${analysis.regime}.`,
+            "Add setup is valid but borderline, so execution is deferred pending one more hourly confirmation.",
+          ],
+    });
+  }
+
+  return holdDecision(
+    context,
+    analysis,
+    [
+      `Regime is ${analysis.regime}.`,
+      "Existing hold remains healthy enough that add quality did not clear the hysteresis threshold.",
+    ],
+    diagnostics,
+    exposureGuardrails,
+    bullishScore,
+    qualityBucket,
+    reentryPenaltyApplied,
+  );
+}
+
+function decideReduceAction(input: {
+  context: PaperTradingContext;
+  analysis: PositionStructureAnalysis;
+  weaknessEvidence: number;
+  diagnostics: PaperTradingDecision["diagnostics"];
+  exposureGuardrails: PaperTradingDecision["exposureGuardrails"];
+  reentryPenaltyApplied: boolean;
+}): PaperTradingDecision | null {
+  const { context, analysis, weaknessEvidence, diagnostics, exposureGuardrails, reentryPenaltyApplied } = input;
+  const reduceThreshold = isHealthyHoldState(analysis)
+    ? HEALTHY_HOLD_REDUCE_THRESHOLD
+    : REDUCE_THRESHOLD;
+  const weaknessScore = computeWeaknessScore(analysis);
+
+  if (weaknessScore < reduceThreshold) {
+    return null;
+  }
+
+  const reduceFraction = getGraduatedReduceFraction(weaknessScore, context);
+  const qualityBucket = weaknessScore >= 7 ? "HIGH" : weaknessScore >= 5 ? "MEDIUM" : "BORDERLINE";
 
   return {
-    action: "HOLD",
-    summary: `${context.asset} stays on hold while the existing paper position remains valid.`,
+    action: "REDUCE",
+    summary: `${context.asset} paper reduction is allowed because weakening is now sufficiently clear.`,
     reasons: [
       `Regime is ${analysis.regime}.`,
-      "No add, reduce, or exit condition is strong enough right now.",
+      "Weakening evidence cleared the reduce hysteresis threshold.",
+      weaknessEvidence >= 3
+        ? "Multiple weakness signals are aligned, so a staged reduction is justified."
+        : "Weakness is present, but reduction remains staged rather than full exit.",
     ],
+    targetCashToUse: 0,
+    targetQuantityFraction: reduceFraction,
+    referencePrice: analysis.currentPrice,
+    executionDisposition: "IMMEDIATE",
+    signalQuality: {
+      score: weaknessScore,
+      bucket: qualityBucket,
+      confirmationRequired: false,
+      confirmationSatisfied: false,
+      reentryPenaltyApplied,
+    },
+    exposureGuardrails,
+    diagnostics,
+  };
+}
+
+function bullishDecision(input: {
+  context: PaperTradingContext;
+  analysis: PositionStructureAnalysis;
+  action: "ENTRY" | "ADD";
+  executionDisposition: DecisionExecutionDisposition;
+  qualityBucket: SignalQualityBucket;
+  bullishScore: number;
+  reentryPenaltyApplied: boolean;
+  confirmationSatisfied: boolean;
+  allocationMultiplier: number;
+  diagnostics: PaperTradingDecision["diagnostics"];
+  exposureGuardrails: PaperTradingDecision["exposureGuardrails"];
+  extraReasons: string[];
+}): PaperTradingDecision {
+  const {
+    context,
+    analysis,
+    action,
+    executionDisposition,
+    qualityBucket,
+    bullishScore,
+    reentryPenaltyApplied,
+    confirmationSatisfied,
+    allocationMultiplier,
+    diagnostics,
+    exposureGuardrails,
+    extraReasons,
+  } = input;
+  const baseCash = getDefaultTargetCash(action, context.account.cashBalance, context.settings);
+  const cappedCash = Math.max(
+    0,
+    Math.min(
+      baseCash * allocationMultiplier,
+      context.account.cashBalance,
+      exposureGuardrails.remainingAssetCapacity,
+      exposureGuardrails.remainingPortfolioCapacity,
+    ),
+  );
+
+  return {
+    action,
+    summary:
+      executionDisposition === "DEFERRED_CONFIRMATION"
+        ? `${context.asset} ${action.toLowerCase()} setup is deferred pending one additional hourly confirmation.`
+        : `${context.asset} paper ${action.toLowerCase()} is allowed by constructive structure.`,
+    reasons: [
+      ...extraReasons,
+      analysis.pullbackZone
+        ? "Pullback structure is available."
+        : analysis.reclaimStructure
+          ? "Reclaim structure is intact."
+          : "Breakout-hold structure is intact.",
+      reentryPenaltyApplied
+        ? "Recent exit caution slightly raised the re-entry threshold, but the current structure still cleared it."
+        : "No recent-exit caution is suppressing the setup.",
+    ],
+    targetCashToUse: cappedCash,
+    targetQuantityFraction: null,
+    referencePrice: analysis.currentPrice,
+    executionDisposition,
+    signalQuality: {
+      score: bullishScore,
+      bucket: qualityBucket,
+      confirmationRequired: executionDisposition === "DEFERRED_CONFIRMATION" || confirmationSatisfied,
+      confirmationSatisfied,
+      reentryPenaltyApplied,
+    },
+    exposureGuardrails,
+    diagnostics,
+  };
+}
+
+function holdDecision(
+  context: PaperTradingContext,
+  analysis: PositionStructureAnalysis,
+  reasons: string[],
+  diagnostics: PaperTradingDecision["diagnostics"],
+  exposureGuardrails: PaperTradingDecision["exposureGuardrails"],
+  score: number,
+  qualityBucket: SignalQualityBucket,
+  reentryPenaltyApplied: boolean,
+): PaperTradingDecision {
+  const hasPosition = (context.position?.quantity ?? 0) > 0;
+  return {
+    action: "HOLD",
+    summary: hasPosition
+      ? `${context.asset} stays on hold while the existing paper position remains valid.`
+      : `${context.asset} stays on hold because entry quality is not strong enough yet.`,
+    reasons,
     targetCashToUse: 0,
     targetQuantityFraction: null,
     referencePrice: analysis.currentPrice,
+    executionDisposition: "SKIPPED",
+    signalQuality: {
+      score,
+      bucket: qualityBucket,
+      confirmationRequired: false,
+      confirmationSatisfied: false,
+      reentryPenaltyApplied,
+    },
+    exposureGuardrails,
     diagnostics,
   };
+}
+
+function buildExposureGuardrails(context: PaperTradingContext): PaperTradingDecision["exposureGuardrails"] {
+  const totalEquity = Math.max(context.portfolio.totalEquity, context.account.cashBalance);
+  const perAssetLimitValue = totalEquity * context.settings.perAssetMaxAllocation;
+  const totalExposureLimitValue = totalEquity * context.settings.totalPortfolioMaxExposure;
+
+  return {
+    perAssetMaxAllocation: context.settings.perAssetMaxAllocation,
+    totalPortfolioMaxExposure: context.settings.totalPortfolioMaxExposure,
+    remainingAssetCapacity: Math.max(0, perAssetLimitValue - context.portfolio.assetMarketValue),
+    remainingPortfolioCapacity: Math.max(0, totalExposureLimitValue - context.portfolio.totalExposureValue),
+  };
+}
+
+function hasBullishRiskCapacity(
+  context: PaperTradingContext,
+  exposureGuardrails: PaperTradingDecision["exposureGuardrails"],
+): boolean {
+  return context.account.cashBalance >= context.settings.minimumTradeValueKrw
+    && exposureGuardrails.remainingAssetCapacity >= context.settings.minimumTradeValueKrw
+    && exposureGuardrails.remainingPortfolioCapacity >= context.settings.minimumTradeValueKrw;
+}
+
+function hasPendingBullishConfirmation(
+  context: PaperTradingContext,
+  action: "ENTRY" | "ADD",
+): boolean {
+  const latestDecision = context.latestDecision;
+  if (!latestDecision || latestDecision.action !== action || latestDecision.executionStatus !== "SKIPPED") {
+    return false;
+  }
+
+  const rationale = readDecisionRationale(latestDecision.rationale);
+  return rationale.executionDisposition === "DEFERRED_CONFIRMATION";
+}
+
+function computeBullishScore(analysis: PositionStructureAnalysis): number {
+  let score = 0;
+
+  if (analysis.regime === "BULL_TREND") score += 3;
+  else if (analysis.regime === "PULLBACK_IN_UPTREND") score += 3;
+  else if (analysis.regime === "EARLY_RECOVERY") score += 2;
+  else if (analysis.regime === "RECLAIM_ATTEMPT") score += 1;
+
+  if (analysis.invalidationState === "CLEAR") score += 2;
+  if (analysis.pullbackZone) score += 1;
+  if (analysis.reclaimStructure) score += 2;
+  if (analysis.breakoutHoldStructure) score += 2;
+  if (analysis.volumeRecovery) score += 1;
+  if (analysis.macdImproving) score += 1;
+  if (analysis.rsiRecovery) score += 1;
+  if (analysis.upperRangeChase) score -= 2;
+  if (analysis.breakdown4h) score -= 3;
+  if (analysis.breakdown1d) score -= 4;
+
+  return score;
+}
+
+function computeWeaknessScore(analysis: PositionStructureAnalysis): number {
+  let score = 0;
+
+  if (analysis.riskLevel === "ELEVATED") score += 2;
+  if (analysis.failedReclaim) score += 2;
+  if (analysis.bearishMomentumExpansion) score += 2;
+  if (analysis.breakdown4h) score += 2;
+  if (analysis.regime === "WEAK_DOWNTREND") score += 1;
+  if (analysis.atrShock) score += 1;
+  if (analysis.upperRangeChase && analysis.timeframes["1h"].trend === "DOWN") score += 1;
+
+  return score;
+}
+
+function countBullishEvidence(analysis: PositionStructureAnalysis): number {
+  return [
+    analysis.pullbackZone,
+    analysis.reclaimStructure,
+    analysis.breakoutHoldStructure,
+    analysis.volumeRecovery,
+    analysis.macdImproving,
+    analysis.rsiRecovery,
+    analysis.invalidationState === "CLEAR",
+  ].filter(Boolean).length;
+}
+
+function countWeaknessEvidence(analysis: PositionStructureAnalysis): number {
+  return [
+    analysis.failedReclaim,
+    analysis.bearishMomentumExpansion,
+    analysis.breakdown4h,
+    analysis.atrShock,
+    analysis.regime === "WEAK_DOWNTREND",
+  ].filter(Boolean).length;
+}
+
+function isConstructiveBullishCandidate(analysis: PositionStructureAnalysis): boolean {
+  return analysis.invalidationState === "CLEAR"
+    && !analysis.upperRangeChase
+    && !analysis.breakdown1d
+    && !analysis.breakdown4h
+    && (analysis.pullbackZone || analysis.reclaimStructure || analysis.breakoutHoldStructure)
+    && (
+      analysis.regime === "BULL_TREND"
+      || analysis.regime === "PULLBACK_IN_UPTREND"
+      || analysis.regime === "EARLY_RECOVERY"
+      || analysis.regime === "RECLAIM_ATTEMPT"
+    );
+}
+
+function isHealthyHoldState(analysis: PositionStructureAnalysis): boolean {
+  return analysis.invalidationState === "CLEAR"
+    && !analysis.failedReclaim
+    && !analysis.bearishMomentumExpansion
+    && analysis.regime !== "WEAK_DOWNTREND";
+}
+
+function getGraduatedReduceFraction(
+  weaknessScore: number,
+  context: PaperTradingContext,
+): number {
+  const base = getDefaultReduceFraction(context.settings);
+  if (weaknessScore >= 7) {
+    return Math.min(0.9, base * 1.75);
+  }
+  if (weaknessScore >= 5) {
+    return Math.min(0.75, base * 1.2);
+  }
+  return Math.max(0.2, base * 0.65);
+}
+
+function toQualityBucket(score: number): SignalQualityBucket {
+  if (score >= 8) return "HIGH";
+  if (score >= 6) return "MEDIUM";
+  if (score >= 4) return "BORDERLINE";
+  return "LOW";
+}
+
+function readDecisionRationale(rationale: unknown): {
+  executionDisposition?: DecisionExecutionDisposition;
+} {
+  if (!rationale || typeof rationale !== "object") {
+    return {};
+  }
+
+  const value = rationale as Record<string, unknown>;
+  if (typeof value.executionDisposition === "string") {
+    return { executionDisposition: value.executionDisposition as DecisionExecutionDisposition };
+  }
+
+  return {};
 }

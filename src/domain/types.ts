@@ -228,6 +228,12 @@ export interface UserStateBundle {
 export type PaperTradeAction = "HOLD" | "ENTRY" | "ADD" | "REDUCE" | "EXIT";
 export type PaperTradeSide = "BUY" | "SELL";
 export type StrategyDecisionExecutionStatus = "EXECUTED" | "SKIPPED";
+export type SignalQualityBucket = "HIGH" | "MEDIUM" | "BORDERLINE" | "LOW";
+export type DecisionExecutionDisposition =
+  | "IMMEDIATE"
+  | "DEFERRED_CONFIRMATION"
+  | "EXECUTED_AFTER_CONFIRMATION"
+  | "SKIPPED";
 
 export interface PaperAccount {
   id: number;
@@ -308,6 +314,19 @@ export interface PaperTradingContext {
   market: SupportedMarket;
   account: PaperAccount;
   position: PaperPosition | null;
+  portfolio: {
+    totalEquity: number;
+    assetMarketValue: number;
+    totalExposureValue: number;
+    assetExposureRatio: number;
+    totalExposureRatio: number;
+  };
+  latestDecision: StrategyDecisionRecord | null;
+  recentExit: {
+    tradeId: number | null;
+    createdAt: string | null;
+    hoursSinceExit: number | null;
+  };
   marketSnapshot: MarketSnapshot;
   generatedAt: string;
   settings: PaperTradingSettings;
@@ -320,6 +339,20 @@ export interface PaperTradingDecision {
   targetCashToUse: number;
   targetQuantityFraction: number | null;
   referencePrice: number;
+  executionDisposition: DecisionExecutionDisposition;
+  signalQuality: {
+    score: number;
+    bucket: SignalQualityBucket;
+    confirmationRequired: boolean;
+    confirmationSatisfied: boolean;
+    reentryPenaltyApplied: boolean;
+  };
+  exposureGuardrails: {
+    perAssetMaxAllocation: number;
+    totalPortfolioMaxExposure: number;
+    remainingAssetCapacity: number;
+    remainingPortfolioCapacity: number;
+  };
   diagnostics: {
     regime: MarketRegime;
     riskLevel: DecisionRiskLevel;
@@ -332,12 +365,15 @@ export interface PaperTradingDecision {
     currentPrice: number;
     cashBalance: number;
     positionQuantity: number;
+    bullishEvidenceCount?: number;
+    weaknessEvidenceCount?: number;
   };
 }
 
 export interface PaperExecutionResult {
   action: PaperTradeAction;
   executed: boolean;
+  executionDisposition: DecisionExecutionDisposition;
   summary: string;
   reasons: string[];
   trade: PaperTrade | null;
@@ -371,6 +407,8 @@ export interface PaperTradingSettings {
   entryAllocation: number;
   addAllocation: number;
   reduceFraction: number;
+  perAssetMaxAllocation: number;
+  totalPortfolioMaxExposure: number;
 }
 
 export type PaperTradingSettingSource = "default" | "env";

@@ -35,6 +35,7 @@ const runtimeConfig = createRuntimeConfig({
   PAPER_INITIAL_CASH_KRW: "2500000",
   PAPER_FEE_RATE: "0.0008",
   PAPER_ENTRY_ALLOCATION: "0.35",
+  PAPER_TOTAL_PORTFOLIO_MAX_EXPOSURE: "0.7",
 });
 
 assertEqual(
@@ -61,6 +62,11 @@ assertEqual(
   runtimeConfig.paperTradingSettings.sourceByField.reduceFraction,
   "default",
   "Settings metadata should indicate when a field remains on the default fallback.",
+);
+assertEqual(
+  runtimeConfig.paperTradingSettings.values.totalPortfolioMaxExposure,
+  0.7,
+  "Runtime config should resolve exposure-based guardrail overrides.",
 );
 
 const invalidReport = getRuntimeConfigReport(

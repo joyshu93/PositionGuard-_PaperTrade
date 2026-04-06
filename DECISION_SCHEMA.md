@@ -17,6 +17,7 @@ At this stage the repository may implement:
 - persistence for paper trades, equity, and strategy decisions
 - concise Telegram reporting for simulated executions and cumulative performance
 - global paper-trading settings resolution with explicit defaults and optional env overrides
+- inspectable hysteresis and confirmation rules that improve decision quality without adding artificial trade bans
 
 At this stage the repository must not implement:
 
@@ -41,9 +42,11 @@ At this stage the repository must not implement:
 4. Build a typed paper-trading context.
 5. Analyze market structure.
 6. Apply deterministic action rules.
-7. If action is not `HOLD`, calculate a simulated fill using explicit fee and slippage assumptions.
-8. Persist updated paper account, position, trade, equity snapshot, and strategy decision state.
-9. Send Telegram execution summary when a simulated fill occurs.
+7. Apply hysteresis so that switching into bullish action requires more evidence than simply remaining on `HOLD`.
+8. For borderline `ENTRY` and `ADD` setups, defer once and require one additional hourly confirmation.
+9. If action is not deferred or `HOLD`, calculate a simulated fill using explicit fee, slippage, sizing, and exposure guardrails.
+10. Persist updated paper account, position, trade, equity snapshot, and strategy decision state.
+11. Send Telegram execution summary when a simulated fill occurs.
 
 ## Decision Input Shape
 
@@ -90,6 +93,9 @@ The current rule set uses inspectable structure inputs only:
 - bearish momentum expansion
 - current cash balance
 - current paper position quantity
+- latest persisted decision for same-asset confirmation context
+- recent same-asset exit as a soft re-entry caution input
+- current per-asset and portfolio exposure state
 
 ## Decision Output Shape
 
@@ -102,6 +108,12 @@ Required fields:
 - `targetQuantityFraction`
 - `referencePrice`
 - `diagnostics`
+
+Decision output may also include:
+
+- signal-quality bucket
+- execution disposition such as `IMMEDIATE`, `DEFERRED_CONFIRMATION`, or `EXECUTED_AFTER_CONFIRMATION`
+- explicit exposure guardrail state
 
 Allowed action values:
 
@@ -120,6 +132,8 @@ Execution remains internal only.
 - `HOLD` produces no trade row
 - fee and slippage assumptions must stay explicit in code constants
 - fee, slippage, sizing, and minimum trade assumptions must stay explicit in the paper-trading configuration layer
+- exposure guardrails must stay explicit via per-asset max allocation and total portfolio max exposure
+- borderline bullish confirmation is allowed, but invalidation-based exits must never be delayed
 - cash must never go negative
 - quantity must never go negative
 
@@ -140,7 +154,7 @@ User-facing reporting must be explicit that execution is simulated.
 - `/status` shows current paper cash, BTC/ETH positions, average entry, and unrealized pnl
 - `/pnl` shows realized pnl, current equity, cumulative return, and win rate when available
 - `/history` shows recent simulated trades
-- `/decision` shows the latest persisted BTC and ETH decision summaries
+- `/decision` shows the latest persisted BTC and ETH decision summaries, including whether the action was immediate, deferred for confirmation, or executed after confirmation
 - `/daily` shows KST-day paper-trading activity
 - `/settings` shows active global paper-trading settings
 - execution reports must say paper fill or simulated fill and must never imply broker connectivity
@@ -152,3 +166,4 @@ User-facing reporting must be explicit that execution is simulated.
 - keep additive schema evolution
 - keep BTC/ETH-only scope explicit
 - keep survival-first and invalidation-first framing visible in naming and reasons
+- improve decision quality through hysteresis, confirmation, soft re-entry caution, and exposure guardrails rather than artificial frequency locks

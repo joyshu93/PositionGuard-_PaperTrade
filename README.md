@@ -125,6 +125,8 @@ Active settings are visible in `/settings`:
 - entry allocation
 - add allocation
 - reduce fraction
+- per-asset max allocation
+- total portfolio max exposure
 
 Current source precedence:
 
@@ -159,9 +161,10 @@ Cumulative stats are calculated from persisted trade history as follows:
 `/decision` shows the latest persisted BTC and ETH decision rows with:
 
 - localized action label
-- execution status
+- whether the action was immediate, deferred for confirmation, or executed after confirmation
 - summary
 - top reasons
+- signal quality bucket
 - reference price
 
 If market data was unavailable and the hourly cycle skipped a decision, `/decision` should make that clear from the stored summary and execution status.
@@ -180,6 +183,21 @@ Hourly reporting behavior:
 - one hourly summary is sent after BTC and ETH are both processed
 - hourly summary and execution alerts respect sleep mode
 - action labels are localized for both English and Korean output
+
+## Decision Quality Refinements
+
+This version improves decision quality without adding artificial trade bans such as max-trades-per-day locks or forced cooldown timers.
+
+The main refinements are:
+
+- hysteresis: it is intentionally harder to switch from flat/HOLD into `ENTRY` or `ADD` than it is to remain on `HOLD`
+- confirmation for borderline bullish setups: weaker but still valid `ENTRY` and `ADD` setups are deferred until one more hourly confirmation appears
+- immediate invalidation exits: invalidation-based `EXIT` remains immediate and is never delayed by confirmation logic
+- graduated sizing: stronger constructive structure uses more of the staged allocation, while borderline confirmed structure uses less
+- soft re-entry caution: a recent exit slightly raises the threshold for a fresh `ENTRY`, but strong reclaim/recovery structure can still override it
+- exposure-based guardrails: additional bullish sizing is capped by per-asset and total-portfolio exposure limits
+
+These are decision-quality refinements, not mechanical trade-frequency bans.
 
 ## Local Setup
 

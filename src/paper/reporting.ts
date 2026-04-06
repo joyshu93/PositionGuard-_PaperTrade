@@ -1,10 +1,12 @@
 import type {
+  DecisionExecutionDisposition,
   PaperDailySummary,
   PaperDecisionSnapshot,
   PaperPerformanceSnapshot,
   PaperTrade,
   PaperTradeAction,
   PaperTradingSettingsView,
+  SignalQualityBucket,
   StrategyDecisionExecutionStatus,
   StrategyDecisionRecord,
   SupportedAsset,
@@ -140,6 +142,8 @@ export function renderPaperSettingsMessage(
     `${locale === "ko" ? "진입 배분" : "Entry allocation"}: ${formatPercent(locale, settings.values.entryAllocation * 100)} (${sourceLabel("entryAllocation")})`,
     `${locale === "ko" ? "추가매수 배분" : "Add allocation"}: ${formatPercent(locale, settings.values.addAllocation * 100)} (${sourceLabel("addAllocation")})`,
     `${locale === "ko" ? "축소 비중" : "Reduce fraction"}: ${formatPercent(locale, settings.values.reduceFraction * 100)} (${sourceLabel("reduceFraction")})`,
+    `${locale === "ko" ? "자산별 최대 비중" : "Per-asset max allocation"}: ${formatPercent(locale, settings.values.perAssetMaxAllocation * 100)} (${sourceLabel("perAssetMaxAllocation")})`,
+    `${locale === "ko" ? "총 최대 익스포저" : "Total portfolio max exposure"}: ${formatPercent(locale, settings.values.totalPortfolioMaxExposure * 100)} (${sourceLabel("totalPortfolioMaxExposure")})`,
   ].join("\n");
 }
 
@@ -265,9 +269,12 @@ function renderDecisionLine(
       : `${asset}: No persisted decision yet.`;
   }
 
+  const meta = readDecisionMeta(decision.rationale);
   const reasons = decision.reasons.slice(0, 2).join(" / ");
+
   return [
-    `${asset}: ${getLocalizedPaperActionLabel(locale, decision.action)} | ${getExecutionStatusLabel(locale, decision.executionStatus)}`,
+    `${asset}: ${getLocalizedPaperActionLabel(locale, decision.action)} | ${getDispositionLabel(locale, meta.executionDisposition, decision.executionStatus)}`,
+    `${locale === "ko" ? "신호 강도" : "Signal quality"}: ${getQualityBucketLabel(locale, meta.signalQualityBucket)}`,
     decision.summary,
     `${locale === "ko" ? "사유" : "Reasons"}: ${reasons || na(locale)}`,
     `${locale === "ko" ? "기준가" : "Reference"}: ${decision.referencePrice > 0 ? formatKrw(locale, decision.referencePrice) : na(locale)}`,
@@ -290,15 +297,75 @@ function renderActionCounts(
   return parts.length > 0 ? parts.join(" / ") : locale === "ko" ? "없음" : "none";
 }
 
-function getExecutionStatusLabel(
-  locale: SupportedLocale,
-  status: StrategyDecisionExecutionStatus,
-): string {
-  if (locale === "ko") {
-    return status === "EXECUTED" ? "실행됨" : "건너뜀";
+function readDecisionMeta(rationale: unknown): {
+  executionDisposition: DecisionExecutionDisposition;
+  signalQualityBucket: SignalQualityBucket | null;
+} {
+  if (!rationale || typeof rationale !== "object") {
+    return {
+      executionDisposition: "SKIPPED",
+      signalQualityBucket: null,
+    };
   }
 
-  return status === "EXECUTED" ? "Executed" : "Skipped";
+  const value = rationale as Record<string, unknown>;
+  const signalQuality =
+    value.signalQuality && typeof value.signalQuality === "object"
+      ? (value.signalQuality as Record<string, unknown>)
+      : null;
+
+  return {
+    executionDisposition:
+      typeof value.executionDisposition === "string"
+        ? (value.executionDisposition as DecisionExecutionDisposition)
+        : "SKIPPED",
+    signalQualityBucket:
+      signalQuality && typeof signalQuality.bucket === "string"
+        ? (signalQuality.bucket as SignalQualityBucket)
+        : null,
+  };
+}
+
+function getDispositionLabel(
+  locale: SupportedLocale,
+  disposition: DecisionExecutionDisposition,
+  executionStatus: StrategyDecisionExecutionStatus,
+): string {
+  if (locale === "ko") {
+    if (disposition === "DEFERRED_CONFIRMATION") return "확인 대기";
+    if (disposition === "EXECUTED_AFTER_CONFIRMATION") return "확인 후 실행";
+    if (disposition === "IMMEDIATE" && executionStatus === "EXECUTED") return "즉시 실행";
+    return executionStatus === "EXECUTED" ? "실행됨" : "건너뜀";
+  }
+
+  if (disposition === "DEFERRED_CONFIRMATION") return "Deferred";
+  if (disposition === "EXECUTED_AFTER_CONFIRMATION") return "Executed after confirmation";
+  if (disposition === "IMMEDIATE" && executionStatus === "EXECUTED") return "Immediate";
+  return executionStatus === "EXECUTED" ? "Executed" : "Skipped";
+}
+
+function getQualityBucketLabel(
+  locale: SupportedLocale,
+  bucket: SignalQualityBucket | null,
+): string {
+  if (bucket === null) {
+    return na(locale);
+  }
+
+  const ko: Record<SignalQualityBucket, string> = {
+    HIGH: "높음",
+    MEDIUM: "보통",
+    BORDERLINE: "경계",
+    LOW: "낮음",
+  };
+  const en: Record<SignalQualityBucket, string> = {
+    HIGH: "High",
+    MEDIUM: "Medium",
+    BORDERLINE: "Borderline",
+    LOW: "Low",
+  };
+
+  return (locale === "ko" ? ko : en)[bucket];
 }
 
 function label(

@@ -63,6 +63,7 @@ import {
 import {
   createPaperTrade,
   getCumulativeClosedTradeStatsForUser,
+  getLatestExitTradeForUserAsset,
   getPaperTradeStatsForUserBetween,
   listRecentPaperTradesForUser,
 } from "./paper-trades.js";
@@ -542,6 +543,24 @@ export async function listRecentStrategyDecisions(
 ): Promise<DomainStrategyDecisionRecord[]> {
   const records = await listRecentStrategyDecisionsForUser(db, userId, limit);
   return records.map(mapStrategyDecisionRecord);
+}
+
+export async function getLatestStrategyDecisionByUserAsset(
+  db: D1DatabaseLike,
+  userId: number,
+  asset: SupportedAsset,
+): Promise<DomainStrategyDecisionRecord | null> {
+  const record = await getLatestStrategyDecisionForUserAsset(db, userId, asset);
+  return record ? mapStrategyDecisionRecord(record) : null;
+}
+
+export async function getLatestExitTradeByUserAsset(
+  db: D1DatabaseLike,
+  userId: number,
+  asset: SupportedAsset,
+): Promise<PaperTrade | null> {
+  const record = await getLatestExitTradeForUserAsset(db, userId, asset);
+  return record ? mapPaperTradeRecord(record) : null;
 }
 
 export async function getPaperPerformanceSnapshot(

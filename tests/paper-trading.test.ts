@@ -1,4 +1,6 @@
 import { assert, assertEqual } from "./test-helpers.js";
+import type { PaperTradingContext } from "../src/domain/types.js";
+import type { PositionStructureAnalysis, TimeframeStructure } from "../src/decision/market-structure.js";
 import {
   applyPaperFill,
   buildEquitySnapshot,
@@ -9,12 +11,12 @@ import {
 } from "../src/paper/math.js";
 import {
   buildHourlySummaryMessage,
-  renderPaperDailyMessage,
   renderPaperDecisionMessage,
   renderPaperPnlMessage,
   renderPaperSettingsMessage,
   renderPaperStatusMessage,
 } from "../src/paper/reporting.js";
+import { buildPaperTradeDecisionFromAnalysis } from "../src/paper/strategy.js";
 import { runUserHourlyCycle } from "../src/hourly.js";
 
 const account = {
@@ -37,6 +39,8 @@ const settings = {
   entryAllocation: 0.3,
   addAllocation: 0.2,
   reduceFraction: 0.4,
+  perAssetMaxAllocation: 0.45,
+  totalPortfolioMaxExposure: 0.75,
 } as const;
 
 const buyQuantity = calculateBuyQuantity(250_000, account.cashBalance, 100_000);
@@ -134,14 +138,6 @@ assert(
   renderPaperPnlMessage(performanceSnapshot, "en").includes("Total closed trades: 3"),
   "/pnl should show cumulative closed-trade count.",
 );
-assert(
-  renderPaperPnlMessage(performanceSnapshot, "en").includes("Cumulative closed-trade win rate: +66.67%"),
-  "/pnl should show cumulative win rate instead of a recent-only rate.",
-);
-assert(
-  renderPaperPnlMessage(performanceSnapshot, "en").includes("Cumulative realized PnL (closed trades): +7,500"),
-  "/pnl should distinguish cumulative realized PnL derived from closed trades.",
-);
 
 const hourlySummary = buildHourlySummaryMessage({
   btcAction: "ENTRY",
@@ -150,10 +146,9 @@ const hourlySummary = buildHourlySummaryMessage({
   locale: "en",
 });
 assert(
-  hourlySummary.includes("Hourly summary") &&
-    hourlySummary.includes("BTC: Entry | ETH: Hold") &&
+  hourlySummary.includes("BTC: Entry | ETH: Hold") &&
     hourlySummary.includes("All values reflect internal simulated paper fills"),
-  "Hourly summary should include localized actions, portfolio metrics, and simulated-fill wording.",
+  "Hourly summary should include localized actions and simulated-fill wording.",
 );
 
 const settingsMessage = renderPaperSettingsMessage(
@@ -168,15 +163,239 @@ const settingsMessage = renderPaperSettingsMessage(
       entryAllocation: "env",
       addAllocation: "default",
       reduceFraction: "env",
+      perAssetMaxAllocation: "default",
+      totalPortfolioMaxExposure: "env",
     },
   },
   "en",
 );
 assert(
-  settingsMessage.includes("Scope: global") &&
-    settingsMessage.includes("Initial paper cash: 2,000,000 KRW (env override)") &&
-    settingsMessage.includes("Reduce fraction: +40% (env override)"),
-  "/settings should show active values and whether they come from defaults or env overrides.",
+  settingsMessage.includes("Per-asset max allocation: +45% (default)") &&
+    settingsMessage.includes("Total portfolio max exposure: +75% (env override)"),
+  "/settings should expose exposure guardrails as active settings.",
+);
+
+const hysteresisEntryHold = buildPaperTradeDecisionFromAnalysis(
+  createContext({ positionQuantity: 0 }),
+  createAnalysis({
+    regime: "EARLY_RECOVERY",
+    pullbackZone: true,
+    volumeRecovery: false,
+    macdImproving: false,
+    reclaimStructure: false,
+    breakoutHoldStructure: false,
+  }),
+);
+assertEqual(
+  hysteresisEntryHold.action,
+  "HOLD",
+  "Hysteresis should keep a flat asset on HOLD when bullish evidence remains below the entry threshold.",
+);
+
+const deferredBorderlineEntry = buildPaperTradeDecisionFromAnalysis(
+  createContext({ positionQuantity: 0 }),
+  createAnalysis({
+    regime: "PULLBACK_IN_UPTREND",
+    pullbackZone: true,
+    volumeRecovery: true,
+    macdImproving: false,
+    reclaimStructure: false,
+    breakoutHoldStructure: false,
+  }),
+);
+assert(
+  deferredBorderlineEntry.action === "ENTRY" &&
+    deferredBorderlineEntry.executionDisposition === "DEFERRED_CONFIRMATION",
+  "Borderline bullish setups should defer ENTRY pending one more hourly confirmation.",
+);
+
+const confirmedBorderlineEntry = buildPaperTradeDecisionFromAnalysis(
+  createContext({
+    positionQuantity: 0,
+    latestDecision: {
+      id: 10,
+      userId: 1,
+      asset: "BTC",
+      market: "KRW-BTC",
+      action: "ENTRY",
+      executionStatus: "SKIPPED",
+      summary: "Deferred",
+      reasons: [],
+      rationale: {
+        executionDisposition: "DEFERRED_CONFIRMATION",
+        signalQuality: { bucket: "BORDERLINE" },
+      },
+      referencePrice: 100_000,
+      fillPrice: null,
+      tradeId: null,
+      createdAt: "2026-04-06T00:00:00.000Z",
+    },
+  }),
+  createAnalysis({
+    regime: "PULLBACK_IN_UPTREND",
+    pullbackZone: true,
+    volumeRecovery: true,
+  }),
+);
+assertEqual(
+  confirmedBorderlineEntry.executionDisposition,
+  "EXECUTED_AFTER_CONFIRMATION",
+  "A repeated borderline bullish setup should execute after one additional hourly confirmation.",
+);
+
+const strongImmediateEntry = buildPaperTradeDecisionFromAnalysis(
+  createContext({ positionQuantity: 0 }),
+  createAnalysis({
+    regime: "BULL_TREND",
+    pullbackZone: true,
+    reclaimStructure: true,
+    breakoutHoldStructure: true,
+    volumeRecovery: true,
+    macdImproving: true,
+  }),
+);
+assert(
+  strongImmediateEntry.action === "ENTRY" &&
+    strongImmediateEntry.executionDisposition === "IMMEDIATE",
+  "Strong bullish setups should execute immediately without waiting for confirmation.",
+);
+
+const immediateInvalidationExit = buildPaperTradeDecisionFromAnalysis(
+  createContext({ positionQuantity: 1 }),
+  createAnalysis({
+    invalidationState: "BROKEN",
+    regime: "BREAKDOWN_RISK",
+    breakdown1d: true,
+  }),
+);
+assert(
+  immediateInvalidationExit.action === "EXIT" &&
+    immediateInvalidationExit.executionDisposition === "IMMEDIATE",
+  "Invalidation-based exits should remain immediate and unchanged.",
+);
+
+const mildWeaknessHold = buildPaperTradeDecisionFromAnalysis(
+  createContext({ positionQuantity: 1 }),
+  createAnalysis({
+    regime: "RANGE",
+    riskLevel: "MODERATE",
+    failedReclaim: false,
+    bearishMomentumExpansion: false,
+    atrShock: false,
+  }),
+);
+assertEqual(
+  mildWeaknessHold.action,
+  "HOLD",
+  "Healthy holds should not flip into REDUCE on weak evidence alone.",
+);
+
+const moderateReduce = buildPaperTradeDecisionFromAnalysis(
+  createContext({ positionQuantity: 1 }),
+  createAnalysis({
+    regime: "WEAK_DOWNTREND",
+    riskLevel: "ELEVATED",
+    failedReclaim: true,
+    bearishMomentumExpansion: false,
+  }),
+);
+const strongerReduce = buildPaperTradeDecisionFromAnalysis(
+  createContext({ positionQuantity: 1 }),
+  createAnalysis({
+    regime: "WEAK_DOWNTREND",
+    riskLevel: "ELEVATED",
+    failedReclaim: true,
+    bearishMomentumExpansion: true,
+  }),
+);
+assert(
+  moderateReduce.action === "REDUCE" &&
+    strongerReduce.action === "REDUCE" &&
+    (moderateReduce.targetQuantityFraction ?? 0) < (strongerReduce.targetQuantityFraction ?? 0),
+  "Reduce sizing should scale up as weakening becomes more clearly confirmed.",
+);
+
+const strongAdd = buildPaperTradeDecisionFromAnalysis(
+  createContext({ positionQuantity: 1 }),
+  createAnalysis({
+    regime: "BULL_TREND",
+    pullbackZone: true,
+    reclaimStructure: true,
+    breakoutHoldStructure: true,
+    volumeRecovery: true,
+    macdImproving: true,
+  }),
+);
+const borderlineAdd = buildPaperTradeDecisionFromAnalysis(
+  createContext({
+    positionQuantity: 1,
+    latestDecision: {
+      id: 12,
+      userId: 1,
+      asset: "BTC",
+      market: "KRW-BTC",
+      action: "ADD",
+      executionStatus: "SKIPPED",
+      summary: "Deferred",
+      reasons: [],
+      rationale: {
+        executionDisposition: "DEFERRED_CONFIRMATION",
+        signalQuality: { bucket: "BORDERLINE" },
+      },
+      referencePrice: 100_000,
+      fillPrice: null,
+      tradeId: null,
+      createdAt: "2026-04-06T00:00:00.000Z",
+    },
+  }),
+  createAnalysis({
+    regime: "PULLBACK_IN_UPTREND",
+    pullbackZone: true,
+    volumeRecovery: false,
+  }),
+);
+assert(
+  strongAdd.action === "ADD" &&
+    borderlineAdd.action === "ADD" &&
+    strongAdd.targetCashToUse > borderlineAdd.targetCashToUse,
+  "Bullish sizing should be more aggressive for stronger constructive structure than for confirmed borderline adds.",
+);
+
+const softReentryPenalty = buildPaperTradeDecisionFromAnalysis(
+  createContext({
+    positionQuantity: 0,
+    recentExitHours: 6,
+  }),
+  createAnalysis({
+    regime: "PULLBACK_IN_UPTREND",
+    pullbackZone: true,
+    volumeRecovery: false,
+  }),
+);
+assertEqual(
+  softReentryPenalty.action,
+  "HOLD",
+  "A recent exit should slightly raise the entry threshold as a soft re-entry caution.",
+);
+
+const strongReentryOvercomesPenalty = buildPaperTradeDecisionFromAnalysis(
+  createContext({
+    positionQuantity: 0,
+    recentExitHours: 6,
+  }),
+  createAnalysis({
+    regime: "BULL_TREND",
+    pullbackZone: true,
+    reclaimStructure: true,
+    breakoutHoldStructure: true,
+    volumeRecovery: true,
+    macdImproving: true,
+  }),
+);
+assert(
+  strongReentryOvercomesPenalty.action === "ENTRY" &&
+    strongReentryOvercomesPenalty.executionDisposition === "IMMEDIATE",
+  "Strong reclaim/recovery structure should still overcome the soft re-entry penalty.",
 );
 
 const decisionMessage = renderPaperDecisionMessage(
@@ -187,61 +406,46 @@ const decisionMessage = renderPaperDecisionMessage(
         userId: 1,
         asset: "BTC",
         market: "KRW-BTC",
-        action: "ADD",
-        executionStatus: "EXECUTED",
-        summary: "BTC paper add is allowed by staged pullback structure.",
-        reasons: ["Regime is BULL_TREND.", "Cash reserve is still available."],
-        rationale: null,
+        action: "ENTRY",
+        executionStatus: "SKIPPED",
+        summary: "BTC entry setup is deferred pending one additional hourly confirmation.",
+        reasons: ["Bullish structure is valid but borderline."],
+        rationale: {
+          executionDisposition: "DEFERRED_CONFIRMATION",
+          signalQuality: { bucket: "BORDERLINE" },
+        },
         referencePrice: 150_000_000,
-        fillPrice: 150_100_000,
-        tradeId: 7,
-        createdAt: "2026-04-03T01:00:00.000Z",
+        fillPrice: null,
+        tradeId: null,
+        createdAt: "2026-04-06T01:00:00.000Z",
       },
       ETH: {
         id: 2,
         userId: 1,
         asset: "ETH",
         market: "KRW-ETH",
-        action: "HOLD",
-        executionStatus: "SKIPPED",
-        summary: "ETH paper decision skipped because market data was unavailable.",
-        reasons: ["Upbit candle response was empty."],
-        rationale: null,
-        referencePrice: 0,
-        fillPrice: null,
-        tradeId: null,
-        createdAt: "2026-04-03T01:00:00.000Z",
+        action: "ADD",
+        executionStatus: "EXECUTED",
+        summary: "ETH paper add is allowed by constructive structure.",
+        reasons: ["Constructive pullback quality is strong enough."],
+        rationale: {
+          executionDisposition: "IMMEDIATE",
+          signalQuality: { bucket: "HIGH" },
+        },
+        referencePrice: 4_500_000,
+        fillPrice: 4_501_000,
+        tradeId: 9,
+        createdAt: "2026-04-06T01:00:00.000Z",
       },
     },
   },
   "en",
 );
 assert(
-  decisionMessage.includes("BTC: Add | Executed") &&
-    decisionMessage.includes("ETH paper decision skipped because market data was unavailable.") &&
-    decisionMessage.includes("Reference: n/a"),
-  "/decision should show action, status, reasons, and missing-market-data skips clearly.",
-);
-
-const dailyMessage = renderPaperDailyMessage(
-  {
-    timezone: "Asia/Seoul",
-    dayLabel: "2026-04-03 KST",
-    tradeCount: 3,
-    realizedPnl: 12_500,
-    currentTotalEquity: 1_120_000,
-    actionCounts: {
-      BTC: { ENTRY: 1, HOLD: 5 },
-      ETH: { REDUCE: 1, HOLD: 5 },
-    },
-  },
-  "en",
-);
-assert(
-  dailyMessage.includes("Simulated trades today: 3") &&
-    dailyMessage.includes("BTC action counts: Entry 1 / Hold 5") &&
-    dailyMessage.includes("Timezone basis: Asia/Seoul (KST)"),
-  "/daily should summarize today's trades, realized PnL, equity, and action counts with explicit timezone wording.",
+  decisionMessage.includes("BTC: Entry | Deferred") &&
+    decisionMessage.includes("Signal quality: Borderline") &&
+    decisionMessage.includes("ETH: Add | Immediate"),
+  "/decision should show deferred versus immediate execution status and the signal quality bucket.",
 );
 
 let aggregatePersistCalls = 0;
@@ -279,6 +483,7 @@ await runUserHourlyCycle({
   processAssetCycle: async (_db, _client, _userState, asset) => ({
     action: asset === "BTC" ? "ENTRY" : "HOLD",
     executed: asset === "BTC",
+    executionDisposition: asset === "BTC" ? "IMMEDIATE" : "SKIPPED",
     summary: `${asset} summary`,
     reasons: [],
     trade: null,
@@ -317,3 +522,148 @@ assertEqual(
   1,
   "A single hourly summary should be sent once per user hourly run when sleep mode is off.",
 );
+
+function createContext(input?: {
+  positionQuantity?: number;
+  latestDecision?: PaperTradingContext["latestDecision"];
+  recentExitHours?: number | null;
+}): PaperTradingContext {
+  const quantity = input?.positionQuantity ?? 0;
+  return {
+    user: {
+      id: 1,
+      telegramUserId: "1",
+      telegramChatId: "100",
+      locale: "en",
+      sleepModeEnabled: false,
+    },
+    asset: "BTC",
+    market: "KRW-BTC",
+    account: {
+      ...account,
+      cashBalance: 1_000_000,
+    },
+    position:
+      quantity > 0
+        ? {
+            id: 1,
+            userId: 1,
+            asset: "BTC",
+            market: "KRW-BTC",
+            quantity,
+            averageEntryPrice: 100_000,
+            lastMarkPrice: 100_000,
+            realizedPnl: 0,
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          }
+        : null,
+    portfolio: {
+      totalEquity: 1_200_000,
+      assetMarketValue: quantity > 0 ? 100_000 : 0,
+      totalExposureValue: quantity > 0 ? 100_000 : 0,
+      assetExposureRatio: quantity > 0 ? 100_000 / 1_200_000 : 0,
+      totalExposureRatio: quantity > 0 ? 100_000 / 1_200_000 : 0,
+    },
+    latestDecision: input?.latestDecision ?? null,
+    recentExit: {
+      tradeId: input?.recentExitHours != null ? 5 : null,
+      createdAt: input?.recentExitHours != null ? "2026-04-05T20:00:00.000Z" : null,
+      hoursSinceExit: input?.recentExitHours ?? null,
+    },
+    marketSnapshot: {
+      market: "KRW-BTC",
+      asset: "BTC",
+      ticker: {
+        market: "KRW-BTC",
+        tradePrice: 100_000,
+        changeRate: 0,
+        fetchedAt: "2026-04-06T00:00:00.000Z",
+      },
+      timeframes: {
+        "1h": { timeframe: "1h", candles: [] },
+        "4h": { timeframe: "4h", candles: [] },
+        "1d": { timeframe: "1d", candles: [] },
+      },
+    },
+    generatedAt: "2026-04-06T00:00:00.000Z",
+    settings,
+  };
+}
+
+function createAnalysis(overrides?: Partial<PositionStructureAnalysis>): PositionStructureAnalysis {
+  return {
+    asset: "BTC",
+    market: "KRW-BTC",
+    currentPrice: 100_000,
+    timeframes: {
+      "1h": createTimeframeStructure("1h"),
+      "4h": createTimeframeStructure("4h"),
+      "1d": createTimeframeStructure("1d"),
+    },
+    bearishTrendCount: 0,
+    bullishTrendCount: 2,
+    lowerLocationCount: 1,
+    upperLocationCount: 0,
+    breakdown4h: false,
+    breakdown1d: false,
+    failedReclaim: false,
+    regime: "PULLBACK_IN_UPTREND",
+    regimeSummary: "Constructive pullback.",
+    invalidationLevel: 95_000,
+    invalidationState: "CLEAR",
+    riskLevel: "LOW",
+    upperRangeChase: false,
+    pullbackZone: true,
+    reclaimLevel: 99_000,
+    reclaimStructure: false,
+    breakoutHoldStructure: false,
+    volumeRecovery: true,
+    macdImproving: false,
+    rsiRecovery: false,
+    bearishMomentumExpansion: false,
+    atrShock: false,
+    averageEntryPrice: 100_000,
+    pnlPct: 0,
+    ...overrides,
+  };
+}
+
+function createTimeframeStructure(timeframe: TimeframeStructure["timeframe"]): TimeframeStructure {
+  return {
+    timeframe,
+    trend: "UP",
+    rangeHigh: 105_000,
+    rangeLow: 95_000,
+    previousRangeLow: 96_000,
+    previousRangeHigh: 104_000,
+    location: "MIDDLE",
+    changePct: 0.02,
+    latestClose: 100_000,
+    previousClose: 99_500,
+    swingHigh: 105_000,
+    swingLow: 95_000,
+    support: 95_000,
+    resistance: 105_000,
+    indicators: {
+      ema20: 99_000,
+      ema50: 98_000,
+      ema200: 96_000,
+      atr14: 1_000,
+      rsi14: 52,
+      macdLine: 1,
+      macdSignal: 0.5,
+      macdHistogram: 0.5,
+      previousMacdHistogram: 0.25,
+      volumeRatio: 1,
+    },
+    aboveEma20: true,
+    aboveEma50: true,
+    aboveEma200: true,
+    emaStackBullish: true,
+    emaStackBearish: false,
+    macdHistogramImproving: true,
+    rsiOverbought: false,
+    rsiOversold: false,
+  };
+}

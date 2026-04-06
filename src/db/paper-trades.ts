@@ -157,3 +157,23 @@ export async function getPaperTradeStatsForUserBetween(
     realizedPnl: row?.realized_pnl ?? 0,
   };
 }
+
+export async function getLatestExitTradeForUserAsset(
+  db: D1DatabaseLike,
+  userId: number,
+  asset: "BTC" | "ETH",
+): Promise<PaperTradeRecord | null> {
+  const row = await db
+    .prepare(
+      `SELECT id, user_id, account_id, asset, market, side, action, quantity, fill_price,
+              gross_amount, fee_amount, realized_pnl, slippage_rate, note, created_at
+       FROM paper_trades
+       WHERE user_id = ? AND asset = ? AND side = 'SELL' AND action = 'EXIT'
+       ORDER BY created_at DESC
+       LIMIT 1`,
+    )
+    .bind(userId, asset)
+    .first<PaperTradeRow>();
+
+  return row ? mapPaperTradeRow(row) : null;
+}
