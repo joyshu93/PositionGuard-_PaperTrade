@@ -123,27 +123,52 @@ export function renderPaperSettingsMessage(
   settings: PaperTradingSettingsView,
   locale: SupportedLocale,
 ): string {
-  const sourceLabel = (field: keyof PaperTradingSettingsView["values"]) =>
-    settings.sourceByField[field] === "env"
-      ? locale === "ko"
-        ? "환경값"
-        : "env override"
-      : locale === "ko"
-        ? "기본값"
-        : "default";
+  const sourceSummary = summarizeSettingsSource(locale, settings);
+
+  if (locale === "ko") {
+    return [
+      "설정",
+      "적용 범위: 전역",
+      "",
+      "거래소 기준 참고값",
+      `수수료율: ${formatDecimal(locale, settings.values.feeRate)} (${fieldSourceLabel(locale, settings, "feeRate")})`,
+      `최소 거래 금액: ${formatKrw(locale, settings.values.minimumTradeValueKrw)} (${fieldSourceLabel(locale, settings, "minimumTradeValueKrw")})`,
+      "참고: Upbit KRW 현물 기준을 참고한 값이며, 거래소 정책을 실시간 동기화하지는 않습니다.",
+      "",
+      "내부 시뮬레이션/전략 설정",
+      `초기 페이퍼 현금: ${formatKrw(locale, settings.values.initialPaperCashKrw)} (${fieldSourceLabel(locale, settings, "initialPaperCashKrw")})`,
+      `슬리피지율: ${formatDecimal(locale, settings.values.slippageRate)} (${fieldSourceLabel(locale, settings, "slippageRate")})`,
+      `진입 배분: ${formatPercent(locale, settings.values.entryAllocation * 100)} (${fieldSourceLabel(locale, settings, "entryAllocation")})`,
+      `추가매수 배분: ${formatPercent(locale, settings.values.addAllocation * 100)} (${fieldSourceLabel(locale, settings, "addAllocation")})`,
+      `축소 비중: ${formatPercent(locale, settings.values.reduceFraction * 100)} (${fieldSourceLabel(locale, settings, "reduceFraction")})`,
+      `자산별 최대 비중: ${formatPercent(locale, settings.values.perAssetMaxAllocation * 100)} (${fieldSourceLabel(locale, settings, "perAssetMaxAllocation")})`,
+      `총 최대 익스포저: ${formatPercent(locale, settings.values.totalPortfolioMaxExposure * 100)} (${fieldSourceLabel(locale, settings, "totalPortfolioMaxExposure")})`,
+      "참고: 슬리피지와 배분/익스포저 값은 거래소 정책이 아니라 내부 페이퍼트레이딩 가정입니다.",
+      "",
+      `출처 요약: ${sourceSummary}`,
+    ].join("\n");
+  }
 
   return [
-    locale === "ko" ? "설정" : "Settings",
-    locale === "ko" ? "적용 범위: 전역" : "Scope: global",
-    `${locale === "ko" ? "초기 페이퍼 현금" : "Initial paper cash"}: ${formatKrw(locale, settings.values.initialPaperCashKrw)} (${sourceLabel("initialPaperCashKrw")})`,
-    `${locale === "ko" ? "수수료율" : "Fee rate"}: ${formatDecimal(locale, settings.values.feeRate)} (${sourceLabel("feeRate")})`,
-    `${locale === "ko" ? "슬리피지율" : "Slippage rate"}: ${formatDecimal(locale, settings.values.slippageRate)} (${sourceLabel("slippageRate")})`,
-    `${locale === "ko" ? "최소 거래 금액" : "Minimum trade value"}: ${formatKrw(locale, settings.values.minimumTradeValueKrw)} (${sourceLabel("minimumTradeValueKrw")})`,
-    `${locale === "ko" ? "진입 배분" : "Entry allocation"}: ${formatPercent(locale, settings.values.entryAllocation * 100)} (${sourceLabel("entryAllocation")})`,
-    `${locale === "ko" ? "추가매수 배분" : "Add allocation"}: ${formatPercent(locale, settings.values.addAllocation * 100)} (${sourceLabel("addAllocation")})`,
-    `${locale === "ko" ? "축소 비중" : "Reduce fraction"}: ${formatPercent(locale, settings.values.reduceFraction * 100)} (${sourceLabel("reduceFraction")})`,
-    `${locale === "ko" ? "자산별 최대 비중" : "Per-asset max allocation"}: ${formatPercent(locale, settings.values.perAssetMaxAllocation * 100)} (${sourceLabel("perAssetMaxAllocation")})`,
-    `${locale === "ko" ? "총 최대 익스포저" : "Total portfolio max exposure"}: ${formatPercent(locale, settings.values.totalPortfolioMaxExposure * 100)} (${sourceLabel("totalPortfolioMaxExposure")})`,
+    "Settings",
+    "Scope: global",
+    "",
+    "Exchange-referenced assumptions",
+    `Fee rate: ${formatDecimal(locale, settings.values.feeRate)} (${fieldSourceLabel(locale, settings, "feeRate")})`,
+    `Minimum trade value: ${formatKrw(locale, settings.values.minimumTradeValueKrw)} (${fieldSourceLabel(locale, settings, "minimumTradeValueKrw")})`,
+    "Note: These reference current Upbit KRW spot assumptions, but they are not live-synced from the exchange.",
+    "",
+    "Internal simulation and strategy settings",
+    `Initial paper cash: ${formatKrw(locale, settings.values.initialPaperCashKrw)} (${fieldSourceLabel(locale, settings, "initialPaperCashKrw")})`,
+    `Slippage rate: ${formatDecimal(locale, settings.values.slippageRate)} (${fieldSourceLabel(locale, settings, "slippageRate")})`,
+    `Entry allocation: ${formatPercent(locale, settings.values.entryAllocation * 100)} (${fieldSourceLabel(locale, settings, "entryAllocation")})`,
+    `Add allocation: ${formatPercent(locale, settings.values.addAllocation * 100)} (${fieldSourceLabel(locale, settings, "addAllocation")})`,
+    `Reduce fraction: ${formatPercent(locale, settings.values.reduceFraction * 100)} (${fieldSourceLabel(locale, settings, "reduceFraction")})`,
+    `Per-asset max allocation: ${formatPercent(locale, settings.values.perAssetMaxAllocation * 100)} (${fieldSourceLabel(locale, settings, "perAssetMaxAllocation")})`,
+    `Total portfolio max exposure: ${formatPercent(locale, settings.values.totalPortfolioMaxExposure * 100)} (${fieldSourceLabel(locale, settings, "totalPortfolioMaxExposure")})`,
+    "Note: Slippage, staged sizing, and exposure values are internal paper-trading assumptions, not exchange policy values.",
+    "",
+    `Source summary: ${sourceSummary}`,
   ].join("\n");
 }
 
@@ -289,10 +314,7 @@ function renderActionCounts(
   const ordered: PaperTradeAction[] = ["ENTRY", "ADD", "REDUCE", "EXIT", "HOLD"];
   const parts = ordered
     .filter((action) => (counts[action] ?? 0) > 0)
-    .map(
-      (action) =>
-        `${getLocalizedPaperActionLabel(locale, action)} ${formatNumberForLocale(locale, counts[action] ?? 0, 0)}`,
-    );
+    .map((action) => `${getLocalizedPaperActionLabel(locale, action)} ${formatNumberForLocale(locale, counts[action] ?? 0, 0)}`);
 
   return parts.length > 0 ? parts.join(" / ") : locale === "ko" ? "없음" : "none";
 }
@@ -423,6 +445,35 @@ function label(
   };
 
   return (locale === "ko" ? ko : en)[key] ?? key;
+}
+
+function fieldSourceLabel(
+  locale: SupportedLocale,
+  settings: PaperTradingSettingsView,
+  field: keyof PaperTradingSettingsView["values"],
+): string {
+  const source = settings.sourceByField[field];
+  if (locale === "ko") {
+    return source === "env" ? "환경값" : "코드 기본값";
+  }
+
+  return source === "env" ? "env override" : "code default";
+}
+
+function summarizeSettingsSource(
+  locale: SupportedLocale,
+  settings: PaperTradingSettingsView,
+): string {
+  const envOverrides = Object.values(settings.sourceByField).filter((value) => value === "env").length;
+  if (envOverrides === 0) {
+    return locale === "ko"
+      ? "현재 적용값은 모두 코드 기본 설정에서 왔습니다."
+      : "All active values currently come from code defaults.";
+  }
+
+  return locale === "ko"
+    ? `현재 ${envOverrides}개 항목이 환경값으로 덮어써져 있습니다.`
+    : `${envOverrides} field(s) currently come from environment overrides.`;
 }
 
 function na(locale: SupportedLocale): string {

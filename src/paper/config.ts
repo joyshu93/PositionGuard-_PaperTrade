@@ -35,7 +35,7 @@ export const DEFAULT_PAPER_TRADING_SETTINGS: PaperTradingSettings = {
   initialPaperCashKrw: 1_000_000,
   feeRate: 0.0005,
   slippageRate: 0.0003,
-  minimumTradeValueKrw: 10_000,
+  minimumTradeValueKrw: 5_000,
   entryAllocation: 0.25,
   addAllocation: 0.15,
   reduceFraction: 0.33,

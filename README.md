@@ -82,7 +82,7 @@ On each hourly run:
 
 1. load registered Telegram users
 2. ensure a paper account exists
-3. fetch Upbit market snapshots for `KRW-BTC` and `KRW-ETH`
+3. fetch fresh Upbit market snapshots for `KRW-BTC` and `KRW-ETH` once for that hourly run
 4. build deterministic decision context
 5. run rule-based paper-trading decision logic
 6. simulate fills internally when action is required
@@ -90,6 +90,14 @@ On each hourly run:
 8. persist one aggregate equity snapshot per user after both BTC and ETH finish
 9. send Telegram execution summaries for simulated fills
 10. send one concise hourly summary per user unless sleep mode is enabled
+
+Market-data freshness semantics:
+
+- each hourly run fetches fresh public Upbit data for BTC and ETH at run time
+- the hourly run fetches BTC and ETH as one batch before per-asset decision processing
+- ticker and candle data are not intentionally reused from a previous hourly run
+- ticker metadata now preserves exchange trade time plus fetch time
+- candle metadata now preserves both candle open time and derived candle close time
 
 ## Telegram Commands
 
@@ -111,6 +119,12 @@ On each hourly run:
 
 The previous manual `/setcash` and `/setposition` workflow is intentionally not used in this paper-trading version.
 
+`/start` is intentionally button-first:
+
+- it introduces the paper-trading boundary briefly
+- it opens a compact inline menu for `/status`, `/positions`, `/pnl`, `/history`, `/decision`, `/daily`, `/settings`, and `/help`
+- it avoids dumping the main command list as one long text line
+
 ## Settings
 
 Paper-trading settings are resolved through `src/paper/config.ts`.
@@ -121,22 +135,34 @@ Current support is global-only:
 - optional environment variables can override them for the whole deployment
 - per-user write commands are intentionally not implemented yet
 
-Active settings are visible in `/settings`:
+Active settings are visible in `/settings`.
 
-- initial paper cash
-- fee rate
-- slippage rate
-- minimum trade value
-- entry allocation
-- add allocation
-- reduce fraction
-- per-asset max allocation
-- total portfolio max exposure
+`/settings` now separates:
+
+- exchange-referenced assumptions
+  - fee rate
+  - minimum trade value
+- internal simulation and strategy settings
+  - initial paper cash
+  - slippage rate
+  - entry allocation
+  - add allocation
+  - reduce fraction
+  - per-asset max allocation
+  - total portfolio max exposure
 
 Current source precedence:
 
 1. valid environment variable override
 2. explicit in-code default
+
+Important notes about settings semantics:
+
+- the bot does not live-sync exchange policy values from Upbit during runtime
+- fee rate and minimum trade value are explicit reference assumptions configured in code or env
+- minimum trade value default is currently aligned to the Upbit KRW minimum-order reference of `5,000 KRW`
+- slippage, staged sizing, and exposure limits are internal paper-trading assumptions, not exchange policy values
+- source labels in `/settings` indicate whether the active value comes from a deployment env override or from the code default
 
 Paper reset behavior:
 

@@ -54,6 +54,11 @@ assertEqual(
   "Missing paper settings should fall back to explicit defaults.",
 );
 assertEqual(
+  runtimeConfig.paperTradingSettings.values.minimumTradeValueKrw,
+  5_000,
+  "Minimum trade value should fall back to the explicit Upbit KRW reference default.",
+);
+assertEqual(
   runtimeConfig.paperTradingSettings.sourceByField.entryAllocation,
   "env",
   "Settings metadata should indicate when a field comes from an env override.",

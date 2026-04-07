@@ -1,4 +1,4 @@
-name = "position-guard"
+name = "position-guard-papertrade"
 main = "src/index.ts"
 compatibility_date = "2026-03-30"
 compatibility_flags = ["nodejs_compat"]

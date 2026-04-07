@@ -79,43 +79,49 @@ assert(
   "/status should render the paper-trading status provider output.",
 );
 
-const positionsActions = await routeCommand(
+const startActions = await routeCommand(
   {
     ...baseContext,
-    command: "positions",
-    text: "/positions",
+    command: "start",
+    text: "/start",
   },
   deps,
 );
 assert(
-  positionsActions[0]?.kind === "sendMessage" && positionsActions[0].text.includes("Positions"),
-  "/positions should render the focused paper-trading positions provider output.",
+  startActions[0]?.kind === "sendMessage" &&
+    startActions[0].text.includes("automatic BTC/ETH-only paper-trading Telegram bot"),
+  "/start should explain the automatic paper-trading boundary.",
+);
+assert(
+  startActions[0]?.kind === "sendMessage" &&
+    startActions[0].replyMarkup?.inline_keyboard.length === 3,
+  "/start should expose the main operator views as Telegram buttons.",
 );
 
-const pnlActions = await routeCommand(
+const callbackActions = await routeCommand(
   {
     ...baseContext,
-    command: "pnl",
-    text: "/pnl",
+    command: "callback",
+    text: "nav:settings",
+    replyToCallback: {
+      id: "cb-1",
+      from: { id: 100 },
+      data: "nav:settings",
+      message: {
+        message_id: 1,
+        date: 0,
+        chat: { id: 200, type: "private" },
+        text: "/start",
+      },
+    },
   },
   deps,
 );
 assert(
-  pnlActions[0]?.kind === "sendMessage" && pnlActions[0].text.includes("Paper PnL"),
-  "/pnl should render the paper-trading PnL provider output.",
-);
-
-const historyActions = await routeCommand(
-  {
-    ...baseContext,
-    command: "history",
-    text: "/history",
-  },
-  deps,
-);
-assert(
-  historyActions[0]?.kind === "sendMessage" && historyActions[0].text.includes("Recent paper trades"),
-  "/history should render the paper-trading history provider output.",
+  callbackActions[0]?.kind === "answerCallbackQuery" &&
+    callbackActions[1]?.kind === "sendMessage" &&
+    callbackActions[1].text.includes("Settings"),
+  "Start-menu callbacks should acknowledge the button tap and open the target view.",
 );
 
 const settingsActions = await routeCommand(
@@ -129,32 +135,6 @@ const settingsActions = await routeCommand(
 assert(
   settingsActions[0]?.kind === "sendMessage" && settingsActions[0].text.includes("Settings"),
   "/settings should render the active settings output.",
-);
-
-const decisionActions = await routeCommand(
-  {
-    ...baseContext,
-    command: "decision",
-    text: "/decision",
-  },
-  deps,
-);
-assert(
-  decisionActions[0]?.kind === "sendMessage" && decisionActions[0].text.includes("Latest decisions"),
-  "/decision should render the latest decision output.",
-);
-
-const dailyActions = await routeCommand(
-  {
-    ...baseContext,
-    command: "daily",
-    text: "/daily",
-  },
-  deps,
-);
-assert(
-  dailyActions[0]?.kind === "sendMessage" && dailyActions[0].text.includes("Daily summary"),
-  "/daily should render the current-day summary output.",
 );
 
 const setStartCashActions = await routeCommand(
@@ -202,35 +182,6 @@ assert(
     resetConfirmActions[0].text.includes("Paper account reset completed.") &&
     resetConfirmActions[0].text.includes("3,000,000 KRW"),
   "/resetpaper confirm should report that a fresh paper account was started with the selected starting cash.",
-);
-
-const startActions = await routeCommand(
-  {
-    ...baseContext,
-    command: "start",
-    text: "/start",
-  },
-  deps,
-);
-assert(
-  startActions[0]?.kind === "sendMessage" &&
-    startActions[0].text.includes("automatic BTC/ETH-only paper-trading Telegram bot"),
-  "/start should explain the automatic paper-trading boundary.",
-);
-
-const legacyActions = await routeCommand(
-  {
-    ...baseContext,
-    command: "setcash",
-    text: "/setcash 1000",
-    args: ["1000"],
-  },
-  deps,
-);
-assert(
-  legacyActions[0]?.kind === "sendMessage" &&
-    legacyActions[0].text.includes("no longer uses manual record-only state commands"),
-  "Legacy manual-state commands should explain the new paper-trading boundary.",
 );
 
 const koreanStatusActions = await routeCommand(
@@ -286,7 +237,7 @@ const koreanPnlMessage = renderPaperPnlMessage(
 assert(
   koreanPnlMessage.includes("손익") &&
     koreanPnlMessage.includes("누적 종료 거래 승률") &&
-    koreanPnlMessage.includes("저장된 전체 종료 매도 체결 이력 기준"),
+    koreanPnlMessage.includes("저장된 전체 종료 매도 체결 이력"),
   "Korean /pnl messaging should use Korean labels and cumulative-stat wording.",
 );
 

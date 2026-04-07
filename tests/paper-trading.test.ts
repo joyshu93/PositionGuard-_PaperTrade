@@ -170,9 +170,10 @@ const settingsMessage = renderPaperSettingsMessage(
   "en",
 );
 assert(
-  settingsMessage.includes("Per-asset max allocation: +45% (default)") &&
-    settingsMessage.includes("Total portfolio max exposure: +75% (env override)"),
-  "/settings should expose exposure guardrails as active settings.",
+  settingsMessage.includes("Exchange-referenced assumptions") &&
+    settingsMessage.includes("Minimum trade value: 15,000 KRW") &&
+    settingsMessage.includes("internal paper-trading assumptions"),
+  "/settings should distinguish exchange-referenced assumptions from internal simulation settings.",
 );
 
 const hysteresisEntryHold = buildPaperTradeDecisionFromAnalysis(
@@ -450,6 +451,7 @@ assert(
 
 let aggregatePersistCalls = 0;
 let sentMessages = 0;
+let marketFetchBatchCalls = 0;
 await runUserHourlyCycle({
   db: {} as never,
   telegramClient: {
@@ -494,6 +496,55 @@ await runUserHourlyCycle({
     fillPrice: null,
     latestMarketPrice: asset === "BTC" ? 100_000 : 3_000_000,
   }),
+  fetchMarketSnapshots: async () => {
+    marketFetchBatchCalls += 1;
+    return {
+      BTC: {
+        ok: true,
+        snapshot: {
+          market: "KRW-BTC",
+          asset: "BTC",
+          fetchedAt: "2026-04-06T00:00:00.000Z",
+          ticker: {
+            market: "KRW-BTC",
+            tradePrice: 100_000,
+            changeRate: 0,
+            tradeTimeKst: "2026-04-06T09:00:00",
+            tradeTimeUtc: "2026-04-06T00:00:00",
+            exchangeTimestampMs: 1712361600000,
+            fetchedAt: "2026-04-06T00:00:00.000Z",
+          },
+          timeframes: {
+            "1h": { timeframe: "1h", candles: [] },
+            "4h": { timeframe: "4h", candles: [] },
+            "1d": { timeframe: "1d", candles: [] },
+          },
+        },
+      },
+      ETH: {
+        ok: true,
+        snapshot: {
+          market: "KRW-ETH",
+          asset: "ETH",
+          fetchedAt: "2026-04-06T00:00:00.000Z",
+          ticker: {
+            market: "KRW-ETH",
+            tradePrice: 3_000_000,
+            changeRate: 0,
+            tradeTimeKst: "2026-04-06T09:00:00",
+            tradeTimeUtc: "2026-04-06T00:00:00",
+            exchangeTimestampMs: 1712361600000,
+            fetchedAt: "2026-04-06T00:00:00.000Z",
+          },
+          timeframes: {
+            "1h": { timeframe: "1h", candles: [] },
+            "4h": { timeframe: "4h", candles: [] },
+            "1d": { timeframe: "1d", candles: [] },
+          },
+        },
+      },
+    };
+  },
   persistAggregateSnapshot: async () => {
     aggregatePersistCalls += 1;
     return {
@@ -517,6 +568,11 @@ assertEqual(
   aggregatePersistCalls,
   1,
   "Aggregate equity snapshot should be created once per user hourly run after both assets are processed.",
+);
+assertEqual(
+  marketFetchBatchCalls,
+  1,
+  "Hourly processing should fetch the BTC/ETH market snapshot batch once per user run before processing both assets.",
 );
 assertEqual(
   sentMessages,
@@ -575,10 +631,14 @@ function createContext(input?: {
     marketSnapshot: {
       market: "KRW-BTC",
       asset: "BTC",
+      fetchedAt: "2026-04-06T00:00:00.000Z",
       ticker: {
         market: "KRW-BTC",
         tradePrice: 100_000,
         changeRate: 0,
+        tradeTimeKst: "2026-04-06T09:00:00",
+        tradeTimeUtc: "2026-04-06T00:00:00",
+        exchangeTimestampMs: 1712361600000,
         fetchedAt: "2026-04-06T00:00:00.000Z",
       },
       timeframes: {

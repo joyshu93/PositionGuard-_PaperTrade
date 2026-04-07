@@ -9,7 +9,7 @@ import type {
   UserStateBundle,
 } from "./domain/types.js";
 import { createTelegramBotClient } from "./telegram/client.js";
-import { getMarketForAsset, getMarketSnapshotResult } from "./upbit.js";
+import { getMarketForAsset, getMarketSnapshotResult, type MarketSnapshotResult } from "./upbit.js";
 import {
   createAggregateEquitySnapshot,
   createPaperTradeRecord,
@@ -40,6 +40,10 @@ import { DEFAULT_PAPER_TRADING_SETTINGS } from "./paper/config.js";
 import { resolveUserLocale } from "./i18n/index.js";
 
 const SUPPORTED_ASSETS: SupportedAsset[] = ["BTC", "ETH"];
+const SUPPORTED_MARKETS_BY_ASSET: Record<SupportedAsset, SupportedMarket> = {
+  BTC: "KRW-BTC",
+  ETH: "KRW-ETH",
+};
 
 export interface UserHourlyAssetResult {
   asset: SupportedAsset;
@@ -75,6 +79,7 @@ export async function runUserHourlyCycle(params: {
   paperTradingSettings?: PaperTradingSettings;
   ensureAccount?: typeof ensurePaperAccountByUserId;
   processAssetCycle?: typeof processPaperTradingCycle;
+  fetchMarketSnapshots?: typeof fetchHourlyMarketSnapshots;
   persistAggregateSnapshot?: typeof createAggregateEquitySnapshot;
   loadPerformanceSnapshot?: typeof getPaperPerformanceSnapshot;
 }): Promise<{
@@ -90,6 +95,7 @@ export async function runUserHourlyCycle(params: {
     paperTradingSettings,
     ensureAccount = ensurePaperAccountByUserId,
     processAssetCycle = processPaperTradingCycle,
+    fetchMarketSnapshots = fetchHourlyMarketSnapshots,
     persistAggregateSnapshot = createAggregateEquitySnapshot,
     loadPerformanceSnapshot = getPaperPerformanceSnapshot,
   } = params;
@@ -97,15 +103,16 @@ export async function runUserHourlyCycle(params: {
   await ensureAccount(db, userState.user.id, paperTradingSettings?.initialPaperCashKrw);
 
   const assetResults: UserHourlyAssetResult[] = [];
+  const marketSnapshotResults = await fetchMarketSnapshots(upbitBaseUrl);
   for (const asset of SUPPORTED_ASSETS) {
-    const market = getMarketForAsset(asset);
+    const market = SUPPORTED_MARKETS_BY_ASSET[asset];
     const execution = await processAssetCycle(
       db,
       telegramClient,
       userState,
       asset,
       market,
-      upbitBaseUrl,
+      marketSnapshotResults[asset],
       paperTradingSettings,
     );
     assetResults.push({ asset, execution });
@@ -149,10 +156,13 @@ export async function processPaperTradingCycle(
   userState: UserStateBundle,
   asset: SupportedAsset,
   market: SupportedMarket,
-  upbitBaseUrl: string | null = null,
+  marketResultOrBaseUrl: MarketSnapshotResult | string | null = null,
   paperTradingSettings: PaperTradingSettings = DEFAULT_PAPER_TRADING_SETTINGS,
 ): Promise<PaperExecutionResult> {
-  const marketResult = await getMarketSnapshotResult(upbitBaseUrl ?? undefined, market);
+  const marketResult =
+    typeof marketResultOrBaseUrl === "string" || marketResultOrBaseUrl === null
+      ? await getMarketSnapshotResult(marketResultOrBaseUrl ?? undefined, market)
+      : marketResultOrBaseUrl;
   if (!marketResult.ok) {
     const skipped = await createStrategyDecisionRecord(db, {
       userId: userState.user.id,
@@ -164,6 +174,7 @@ export async function processPaperTradingCycle(
       reasons: [marketResult.message],
       rationale: {
         marketResult,
+        marketTiming: null,
       },
       referencePrice: 0,
       fillPrice: null,
@@ -271,6 +282,19 @@ export async function processPaperTradingCycle(
       executionDisposition: execution.executionDisposition,
       signalQuality: decision.signalQuality,
       exposureGuardrails: decision.exposureGuardrails,
+      marketTiming: {
+        snapshotFetchedAt: marketResult.snapshot.fetchedAt,
+        tickerFetchedAt: marketResult.snapshot.ticker.fetchedAt,
+        tickerTradeTimeUtc: marketResult.snapshot.ticker.tradeTimeUtc,
+        tickerTradeTimeKst: marketResult.snapshot.ticker.tradeTimeKst,
+        tickerExchangeTimestampMs: marketResult.snapshot.ticker.exchangeTimestampMs,
+        latestHourlyOpenTime: marketResult.snapshot.timeframes["1h"].candles.at(-1)?.openTime ?? null,
+        latestHourlyCloseTime: marketResult.snapshot.timeframes["1h"].candles.at(-1)?.closeTime ?? null,
+        latestFourHourOpenTime: marketResult.snapshot.timeframes["4h"].candles.at(-1)?.openTime ?? null,
+        latestFourHourCloseTime: marketResult.snapshot.timeframes["4h"].candles.at(-1)?.closeTime ?? null,
+        latestDailyOpenTime: marketResult.snapshot.timeframes["1d"].candles.at(-1)?.openTime ?? null,
+        latestDailyCloseTime: marketResult.snapshot.timeframes["1d"].candles.at(-1)?.closeTime ?? null,
+      },
     },
     referencePrice: execution.referencePrice,
     fillPrice: execution.fillPrice,
@@ -477,4 +501,18 @@ export async function bootstrapPaperUser(
   const user = await ensureTelegramUser(db, profile);
   await ensurePaperAccountByUserId(db, user.id);
   return getPaperPerformanceSnapshot(db, user.id);
+}
+
+async function fetchHourlyMarketSnapshots(
+  upbitBaseUrl: string | null,
+): Promise<Record<SupportedAsset, MarketSnapshotResult>> {
+  const entries = await Promise.all(
+    SUPPORTED_ASSETS.map(async (asset) => {
+      const market = getMarketForAsset(asset);
+      const result = await getMarketSnapshotResult(upbitBaseUrl ?? undefined, market);
+      return [asset, result] as const;
+    }),
+  );
+
+  return Object.fromEntries(entries) as Record<SupportedAsset, MarketSnapshotResult>;
 }

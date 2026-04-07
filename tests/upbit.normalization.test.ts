@@ -57,6 +57,11 @@ assertEqual(
   240,
   "4h normalization should map to the 240-minute Upbit endpoint.",
 );
+assertEqual(
+  fourHourCandle.closedAtUtc,
+  "2026-03-30T04:00:00",
+  "4h normalization should derive the candle close time from the Upbit open time and timeframe length.",
+);
 
 const dailyCandle = normalizeUpbitDayCandle({
   market: "KRW-BTC",
@@ -105,6 +110,11 @@ assertEqual(
   series.candles[0]?.openedAtUtc ?? null,
   "2026-03-30T01:00:00",
   "Candle series normalization should sort ascending by open time.",
+);
+assertEqual(
+  series.candles[0]?.closedAtUtc ?? null,
+  "2026-03-30T02:00:00",
+  "Normalized candle series should preserve the actual close time instead of duplicating the open time.",
 );
 assertEqual(
   getCandleEndpoint("4h"),

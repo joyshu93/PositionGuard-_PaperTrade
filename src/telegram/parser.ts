@@ -100,6 +100,33 @@ export function parseTelegramCallbackAction(data: string | undefined): TelegramC
     return null;
   }
 
+  if (data === 'nav:start') {
+    return { kind: 'nav:start' };
+  }
+  if (data === 'nav:status') {
+    return { kind: 'nav:status' };
+  }
+  if (data === 'nav:positions') {
+    return { kind: 'nav:positions' };
+  }
+  if (data === 'nav:pnl') {
+    return { kind: 'nav:pnl' };
+  }
+  if (data === 'nav:history') {
+    return { kind: 'nav:history' };
+  }
+  if (data === 'nav:decision') {
+    return { kind: 'nav:decision' };
+  }
+  if (data === 'nav:daily') {
+    return { kind: 'nav:daily' };
+  }
+  if (data === 'nav:settings') {
+    return { kind: 'nav:settings' };
+  }
+  if (data === 'nav:help') {
+    return { kind: 'nav:help' };
+  }
   if (data === 'sleep:on') {
     return { kind: 'sleep:on' };
   }

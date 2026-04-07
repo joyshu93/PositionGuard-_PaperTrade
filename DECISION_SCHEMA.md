@@ -37,7 +37,7 @@ At this stage the repository must not implement:
 ## Decision Flow
 
 1. Load persisted paper account and paper position state.
-2. Fetch public market snapshot for the target asset.
+2. Fetch fresh public market snapshots for BTC and ETH at the start of the hourly run.
 3. Normalize ticker and `1h` / `4h` / `1d` candles.
 4. Build a typed paper-trading context.
 5. Analyze market structure.
@@ -79,7 +79,9 @@ The paper-trading decision engine receives:
 
 - symbol: `KRW-BTC` or `KRW-ETH`
 - current public trade price
+- ticker exchange trade time and fetch time
 - normalized `1h`, `4h`, `1d` candle history
+- candle open time and candle close time for each timeframe
 
 ### Active Rule Inputs
 
@@ -96,6 +98,7 @@ The current rule set uses inspectable structure inputs only:
 - latest persisted decision for same-asset confirmation context
 - recent same-asset exit as a soft re-entry caution input
 - current per-asset and portfolio exposure state
+- fresh hourly-run market snapshot batch for BTC and ETH
 
 ## Decision Output Shape
 

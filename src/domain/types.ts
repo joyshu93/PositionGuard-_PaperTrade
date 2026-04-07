@@ -44,6 +44,9 @@ export interface MarketTicker {
   market: SupportedMarket;
   tradePrice: number;
   changeRate: number;
+  tradeTimeKst: string | null;
+  tradeTimeUtc: string | null;
+  exchangeTimestampMs: number | null;
   fetchedAt: string;
 }
 
@@ -70,6 +73,7 @@ export interface MarketSnapshot {
   asset: SupportedAsset;
   ticker: MarketTicker;
   timeframes: Record<SupportedTimeframe, TimeframeMarketSnapshot>;
+  fetchedAt: string;
 }
 
 export interface DecisionContext {

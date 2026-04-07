@@ -211,6 +211,15 @@ export type TelegramCallbackAction =
   | { kind: 'sleep:on' }
   | { kind: 'sleep:off' }
   | { kind: 'status:refresh' }
+  | { kind: 'nav:start' }
+  | { kind: 'nav:status' }
+  | { kind: 'nav:positions' }
+  | { kind: 'nav:pnl' }
+  | { kind: 'nav:history' }
+  | { kind: 'nav:decision' }
+  | { kind: 'nav:daily' }
+  | { kind: 'nav:settings' }
+  | { kind: 'nav:help' }
   | { kind: 'setup:progress' }
   | { kind: 'setup:track'; trackedAssets: TelegramTrackedAssetsSelection }
   | { kind: 'setup:cash' }
