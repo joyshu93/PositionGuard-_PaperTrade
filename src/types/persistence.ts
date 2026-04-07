@@ -13,6 +13,7 @@ export interface UserRecord {
   trackedAssets: TrackedAssetPreferenceRecord;
   sleepMode: boolean;
   onboardingComplete: boolean;
+  nextPaperStartCash: number | null;
   createdAt: string;
   updatedAt: string;
 }

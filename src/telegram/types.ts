@@ -94,6 +94,8 @@ export interface TelegramStateStore {
   }): Promise<void>;
   setSleepMode(telegramUserId: number, isSleeping: boolean): Promise<void>;
   setLocale?(telegramUserId: number, locale: SupportedLocale): Promise<SupportedLocale>;
+  setNextPaperStartCash?(telegramUserId: number, amount: number | null): Promise<number | null>;
+  resetPaperTrading?(telegramUserId: number): Promise<{ startingCash: number }>;
 }
 
 export interface TelegramStatusProvider {

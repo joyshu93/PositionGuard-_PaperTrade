@@ -41,6 +41,12 @@ const deps = {
     async setLocale(_id: number, locale: "ko" | "en") {
       return locale;
     },
+    async setNextPaperStartCash(_id: number, amount: number | null) {
+      return amount;
+    },
+    async resetPaperTrading() {
+      return { startingCash: 3_000_000 };
+    },
   },
   paperTradingProvider: {
     async getStatus(_id: number, locale: "ko" | "en") {
@@ -149,6 +155,53 @@ const dailyActions = await routeCommand(
 assert(
   dailyActions[0]?.kind === "sendMessage" && dailyActions[0].text.includes("Daily summary"),
   "/daily should render the current-day summary output.",
+);
+
+const setStartCashActions = await routeCommand(
+  {
+    ...baseContext,
+    command: "setstartcash",
+    text: "/setstartcash 3000000",
+    args: ["3000000"],
+  },
+  deps,
+);
+assert(
+  setStartCashActions[0]?.kind === "sendMessage" &&
+    setStartCashActions[0].text.includes("3,000,000 KRW") &&
+    setStartCashActions[0].text.includes("next /resetpaper confirm"),
+  "/setstartcash should confirm that the new starting cash will apply on the next reset only.",
+);
+
+const resetPromptActions = await routeCommand(
+  {
+    ...baseContext,
+    command: "resetpaper",
+    text: "/resetpaper",
+    args: [],
+  },
+  deps,
+);
+assert(
+  resetPromptActions[0]?.kind === "sendMessage" &&
+    resetPromptActions[0].text.includes("/resetpaper confirm"),
+  "/resetpaper should require an explicit confirm step before wiping paper-trading history.",
+);
+
+const resetConfirmActions = await routeCommand(
+  {
+    ...baseContext,
+    command: "resetpaper",
+    text: "/resetpaper confirm",
+    args: ["confirm"],
+  },
+  deps,
+);
+assert(
+  resetConfirmActions[0]?.kind === "sendMessage" &&
+    resetConfirmActions[0].text.includes("Paper account reset completed.") &&
+    resetConfirmActions[0].text.includes("3,000,000 KRW"),
+  "/resetpaper confirm should report that a fresh paper account was started with the selected starting cash.",
 );
 
 const startActions = await routeCommand(

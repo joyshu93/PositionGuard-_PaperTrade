@@ -13,6 +13,7 @@ type UserRow = {
   tracked_assets: "BTC" | "ETH" | "BTC,ETH";
   sleep_mode: number;
   onboarding_complete: number;
+  next_paper_start_cash: number | null;
   created_at: string;
   updated_at: string;
 };
@@ -27,6 +28,7 @@ const mapUserRow = (row: UserRow): UserRecord => ({
   trackedAssets: row.tracked_assets,
   sleepMode: intToBool(row.sleep_mode),
   onboardingComplete: intToBool(row.onboarding_complete),
+  nextPaperStartCash: row.next_paper_start_cash,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
@@ -37,7 +39,7 @@ export const getUserByTelegramId = async (
 ): Promise<UserRecord | null> => {
   const row = await db
     .prepare(
-      `SELECT id, telegram_user_id, telegram_chat_id, username, display_name, tracked_assets, sleep_mode, onboarding_complete, created_at, updated_at
+      `SELECT id, telegram_user_id, telegram_chat_id, username, display_name, tracked_assets, sleep_mode, onboarding_complete, next_paper_start_cash, created_at, updated_at
              , preferred_language
        FROM users
        WHERE telegram_user_id = ?`,
@@ -62,8 +64,8 @@ export const upsertUser = async (
   if (!existing) {
     await db
       .prepare(
-        `INSERT INTO users (telegram_user_id, telegram_chat_id, username, display_name, preferred_language, tracked_assets, sleep_mode, onboarding_complete, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, ?)`,
+        `INSERT INTO users (telegram_user_id, telegram_chat_id, username, display_name, preferred_language, tracked_assets, sleep_mode, onboarding_complete, next_paper_start_cash, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 0, 0, NULL, ?, ?)`,
       )
       .bind(
         input.telegramUserId,
@@ -189,6 +191,27 @@ export const setUserLocale = async (
        WHERE telegram_user_id = ?`,
     )
     .bind(locale, nowIso(), telegramUserId)
+    .run();
+
+  const user = await getUserByTelegramId(db, telegramUserId);
+  if (!user) {
+    throw new Error("User not found");
+  }
+  return user;
+};
+
+export const setUserNextPaperStartCash = async (
+  db: D1DatabaseLike,
+  telegramUserId: string,
+  nextPaperStartCash: number | null,
+): Promise<UserRecord> => {
+  await db
+    .prepare(
+      `UPDATE users
+       SET next_paper_start_cash = ?, updated_at = ?
+       WHERE telegram_user_id = ?`,
+    )
+    .bind(nextPaperStartCash, nowIso(), telegramUserId)
     .run();
 
   const user = await getUserByTelegramId(db, telegramUserId);

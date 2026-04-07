@@ -89,6 +89,7 @@ import {
 import {
   getUserByTelegramId,
   setUserLocale,
+  setUserNextPaperStartCash,
   setUserOnboardingComplete,
   setUserSleepMode,
   setUserTrackedAssets,
@@ -219,6 +220,48 @@ export async function setLocaleByTelegramUserId(
 ): Promise<User> {
   const record = await setUserLocale(db, telegramUserId, locale);
   return mapUserRecord(record);
+}
+
+export async function setNextPaperStartCashByTelegramUserId(
+  db: D1DatabaseLike,
+  telegramUserId: string,
+  nextPaperStartCash: number | null,
+): Promise<User> {
+  const record = await setUserNextPaperStartCash(db, telegramUserId, nextPaperStartCash);
+  return mapUserRecord(record);
+}
+
+export async function resetPaperTradingByTelegramUserId(
+  db: D1DatabaseLike,
+  telegramUserId: string,
+  defaultInitialCash: number,
+): Promise<{
+  user: User;
+  startingCash: number;
+  account: PaperAccount;
+}> {
+  const user = await getUserByTelegramUserId(db, telegramUserId);
+  if (!user) {
+    throw new Error("User not found");
+  }
+
+  const startingCash = user.nextPaperStartCash ?? defaultInitialCash;
+  await db.batch([
+    db.prepare(`DELETE FROM strategy_decisions WHERE user_id = ?`).bind(user.id),
+    db.prepare(`DELETE FROM equity_snapshots WHERE user_id = ?`).bind(user.id),
+    db.prepare(`DELETE FROM paper_trades WHERE user_id = ?`).bind(user.id),
+    db.prepare(`DELETE FROM paper_positions WHERE user_id = ?`).bind(user.id),
+    db.prepare(`DELETE FROM paper_accounts WHERE user_id = ?`).bind(user.id),
+  ]);
+
+  const account = await ensurePaperAccountByUserId(db, user.id, startingCash);
+  const updatedUser = await setNextPaperStartCashByTelegramUserId(db, telegramUserId, null);
+
+  return {
+    user: updatedUser,
+    startingCash,
+    account,
+  };
 }
 
 export async function getTelegramStatusSnapshot(
@@ -715,6 +758,7 @@ function mapUserRecord(record: UserRecord): User {
     trackedAssets: record.trackedAssets,
     sleepModeEnabled: record.sleepMode,
     onboardingComplete: record.onboardingComplete,
+    nextPaperStartCash: record.nextPaperStartCash,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
   };

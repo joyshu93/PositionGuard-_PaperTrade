@@ -14,6 +14,8 @@ import {
   getPaperPerformanceSnapshot,
   listRecentPaperTrades,
   setLocaleByTelegramUserId,
+  setNextPaperStartCashByTelegramUserId,
+  resetPaperTradingByTelegramUserId,
   setSleepModeByTelegramUserId,
 } from "./db/repositories.js";
 import {
@@ -118,6 +120,22 @@ async function handleFetch(
           async setLocale(telegramUserId, locale) {
             const user = await setLocaleByTelegramUserId(env.DB, String(telegramUserId), locale);
             return user.locale ?? locale;
+          },
+          async setNextPaperStartCash(telegramUserId, amount) {
+            const user = await setNextPaperStartCashByTelegramUserId(
+              env.DB,
+              String(telegramUserId),
+              amount,
+            );
+            return user.nextPaperStartCash;
+          },
+          async resetPaperTrading(telegramUserId) {
+            const result = await resetPaperTradingByTelegramUserId(
+              env.DB,
+              String(telegramUserId),
+              runtime.paperTradingSettings.values.initialPaperCashKrw,
+            );
+            return { startingCash: result.startingCash };
           },
         },
         paperTradingProvider: {

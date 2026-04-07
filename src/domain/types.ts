@@ -14,6 +14,7 @@ export interface User {
   trackedAssets: TrackedAssetPreference;
   sleepModeEnabled: boolean;
   onboardingComplete: boolean;
+  nextPaperStartCash: number | null;
   createdAt: string;
   updatedAt: string;
 }

@@ -42,6 +42,8 @@ The first paper-trading iteration includes:
   - `/decision`
   - `/daily`
   - `/settings`
+  - `/setstartcash`
+  - `/resetpaper`
 - Telegram execution summaries for simulated fills
 - one concise hourly summary message per user after each hourly cycle
 
@@ -100,6 +102,9 @@ On each hourly run:
 - `/decision`
 - `/daily`
 - `/settings`
+- `/setstartcash <amount>`
+- `/resetpaper`
+- `/resetpaper confirm`
 - `/language <ko|en>`
 - `/sleep on`
 - `/sleep off`
@@ -132,6 +137,14 @@ Current source precedence:
 
 1. valid environment variable override
 2. explicit in-code default
+
+Paper reset behavior:
+
+- `/setstartcash <amount>` stores a one-time starting cash value for the next reset only
+- `/resetpaper` shows the safety prompt
+- `/resetpaper confirm` clears persisted paper account state and starts fresh
+- after reset, the saved one-time starting cash is consumed and cleared
+- if no one-time starting cash is saved, reset falls back to the global default starting cash
 
 ## Reporting Semantics
 
@@ -198,6 +211,24 @@ The main refinements are:
 - exposure-based guardrails: additional bullish sizing is capped by per-asset and total-portfolio exposure limits
 
 These are decision-quality refinements, not mechanical trade-frequency bans.
+
+## Fresh Start Workflow
+
+If an operator wants a clean paper-trading restart:
+
+1. run `/setstartcash <amount>` if a non-default starting cash is desired
+2. run `/resetpaper`
+3. run `/resetpaper confirm`
+
+Reset clears:
+
+- paper account state
+- paper positions
+- paper trades
+- equity snapshots
+- strategy decisions
+
+This is intentionally safer than mutating the active account baseline in place, because it keeps cumulative return semantics and historical accounting from becoming ambiguous.
 
 ## Local Setup
 
