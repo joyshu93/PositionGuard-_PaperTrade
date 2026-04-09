@@ -152,9 +152,11 @@ async function handleFetch(
               runtime.paperTradingSettings.values.initialPaperCashKrw,
             );
             const livePrices = await getLiveTickerPrices(runtime.upbitBaseUrl ?? undefined);
+            const queriedAt = new Date().toISOString();
             return renderPaperStatusMessage(
               overlayPaperPerformanceLivePrices(snapshot, livePrices),
               locale,
+              queriedAt,
             );
           },
           async getPositions(telegramUserId, locale) {
@@ -168,9 +170,11 @@ async function handleFetch(
               runtime.paperTradingSettings.values.initialPaperCashKrw,
             );
             const livePrices = await getLiveTickerPrices(runtime.upbitBaseUrl ?? undefined);
+            const queriedAt = new Date().toISOString();
             return renderPaperPositionsMessage(
               overlayPaperPerformanceLivePrices(snapshot, livePrices),
               locale,
+              queriedAt,
             );
           },
           async getPnl(telegramUserId, locale) {

@@ -44,6 +44,8 @@ const SUPPORTED_MARKETS_BY_ASSET: Record<SupportedAsset, SupportedMarket> = {
   BTC: "KRW-BTC",
   ETH: "KRW-ETH",
 };
+const TELEGRAM_SEND_MAX_ATTEMPTS = 3;
+const TELEGRAM_SEND_RETRY_DELAYS_MS = [150, 400] as const;
 export type HourlyMarketSnapshotBatch = Record<SupportedAsset, MarketSnapshotResult>;
 
 export interface UserHourlyAssetResult {
@@ -61,14 +63,47 @@ export async function runHourlyCycle(env: Env): Promise<void> {
   });
   const userStates = await listUsersForHourlyRun(runtime.db);
 
+  await runHourlyCycleForUserStates({
+    db: runtime.db,
+    telegramClient,
+    userStates,
+    upbitBaseUrl: runtime.upbitBaseUrl,
+    paperTradingSettings: runtime.paperTradingSettings.values,
+  });
+}
+
+export async function runHourlyCycleForUserStates(params: {
+  db: Env["DB"];
+  telegramClient: ReturnType<typeof createTelegramBotClient>;
+  userStates: UserStateBundle[];
+  upbitBaseUrl: string | null;
+  paperTradingSettings: PaperTradingSettings;
+  runUserCycle?: typeof runUserHourlyCycle;
+}): Promise<void> {
+  const {
+    db,
+    telegramClient,
+    userStates,
+    upbitBaseUrl,
+    paperTradingSettings,
+    runUserCycle = runUserHourlyCycle,
+  } = params;
+
   for (const userState of userStates) {
-    await runUserHourlyCycle({
-      db: runtime.db,
-      telegramClient,
-      userState,
-      upbitBaseUrl: runtime.upbitBaseUrl,
-      paperTradingSettings: runtime.paperTradingSettings.values,
-    });
+    try {
+      await runUserCycle({
+        db,
+        telegramClient,
+        userState,
+        upbitBaseUrl,
+        paperTradingSettings,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[hourly] user ${userState.user.id} (${userState.user.telegramUserId}) hourly cycle failed: ${message}`,
+      );
+    }
   }
 }
 
@@ -134,7 +169,8 @@ export async function runUserHourlyCycle(params: {
 
   if (userState.user.telegramChatId && !userState.user.sleepModeEnabled) {
     const locale = resolveUserLocale(userState.user.locale ?? null);
-    await telegramClient.sendMessage(
+    await safeSendTelegramMessage(
+      telegramClient,
       Number(userState.user.telegramChatId),
       buildHourlySummaryMessage({
         btcAction: assetResults.find((result) => result.asset === "BTC")?.execution.action ?? "HOLD",
@@ -142,6 +178,7 @@ export async function runUserHourlyCycle(params: {
         snapshot: performanceSnapshot,
         locale,
       }),
+      `[hourly] summary send failed for user ${userState.user.id}`,
     );
   }
 
@@ -318,7 +355,8 @@ export async function processPaperTradingCycle(
       userState.user.id,
       paperTradingSettings.initialPaperCashKrw,
     );
-    await telegramClient.sendMessage(
+    await safeSendTelegramMessage(
+      telegramClient,
       Number(userState.user.telegramChatId),
       buildExecutionSummary({
         asset,
@@ -330,13 +368,14 @@ export async function processPaperTradingCycle(
         cumulativeReturnPct: snapshot.cumulativeReturnPct,
         locale,
       }),
+      `[hourly] execution alert send failed for user ${userState.user.id} asset ${asset}`,
     );
   }
 
   return execution;
 }
 
-async function executePaperDecision(
+export async function executePaperDecision(
   db: Env["DB"],
   params: {
     userId: number;
@@ -347,12 +386,22 @@ async function executePaperDecision(
     decision: ReturnType<typeof decidePaperTrade>;
     settings: PaperTradingSettings;
   },
+  deps: {
+    saveAccountSnapshot?: typeof savePaperAccountSnapshot;
+    savePositionSnapshot?: typeof savePaperPositionSnapshot;
+    createTradeRecord?: typeof createPaperTradeRecord;
+  } = {},
 ): Promise<PaperExecutionResult> {
   const { account, position, asset, market, decision, settings } = params;
+  const {
+    saveAccountSnapshot = savePaperAccountSnapshot,
+    savePositionSnapshot = savePaperPositionSnapshot,
+    createTradeRecord = createPaperTradeRecord,
+  } = deps;
 
   if (decision.action === "HOLD") {
     if (position) {
-      await savePaperPositionSnapshot(db, {
+      await savePositionSnapshot(db, {
         ...position,
         lastMarkPrice: decision.referencePrice,
       });
@@ -380,7 +429,7 @@ async function executePaperDecision(
 
   if (decision.executionDisposition === "DEFERRED_CONFIRMATION") {
     if (position) {
-      await savePaperPositionSnapshot(db, {
+      await savePositionSnapshot(db, {
         ...position,
         lastMarkPrice: decision.referencePrice,
       });
@@ -428,6 +477,13 @@ async function executePaperDecision(
         );
 
   if (!fill) {
+    const updatedPosition = position
+      ? await savePositionSnapshot(db, {
+          ...position,
+          lastMarkPrice: decision.referencePrice,
+        })
+      : null;
+
     return {
       action: decision.action,
       executed: false,
@@ -436,12 +492,7 @@ async function executePaperDecision(
       reasons: [...decision.reasons, "Trade size was too small after fees and slippage assumptions."],
       trade: null,
       updatedAccount: account,
-      updatedPosition: position
-        ? {
-            ...position,
-            lastMarkPrice: decision.referencePrice,
-          }
-        : null,
+      updatedPosition,
       referencePrice: decision.referencePrice,
       fillPrice: null,
       latestMarketPrice: decision.referencePrice,
@@ -456,12 +507,12 @@ async function executePaperDecision(
     fill,
   });
 
-  const updatedAccount = await savePaperAccountSnapshot(db, nextState.account);
-  const updatedPosition = await savePaperPositionSnapshot(db, {
+  const updatedAccount = await saveAccountSnapshot(db, nextState.account);
+  const updatedPosition = await savePositionSnapshot(db, {
     ...nextState.position,
     lastMarkPrice: decision.referencePrice,
   });
-  const trade = await createPaperTradeRecord(db, {
+  const trade = await createTradeRecord(db, {
     userId: params.userId,
     accountId: updatedAccount.id,
     asset,
@@ -538,4 +589,35 @@ export function resolvePortfolioMarkPrices(
     BTC: batchPrices.BTC ?? (asset === "BTC" ? currentAssetPrice : positions.BTC?.lastMarkPrice ?? null),
     ETH: batchPrices.ETH ?? (asset === "ETH" ? currentAssetPrice : positions.ETH?.lastMarkPrice ?? null),
   };
+}
+
+async function safeSendTelegramMessage(
+  telegramClient: ReturnType<typeof createTelegramBotClient>,
+  chatId: number,
+  text: string,
+  warningPrefix: string,
+): Promise<void> {
+  let lastError: unknown = null;
+
+  for (let attempt = 1; attempt <= TELEGRAM_SEND_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      await telegramClient.sendMessage(chatId, text);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < TELEGRAM_SEND_MAX_ATTEMPTS) {
+        const delayMs = TELEGRAM_SEND_RETRY_DELAYS_MS[attempt - 1] ?? TELEGRAM_SEND_RETRY_DELAYS_MS.at(-1) ?? 0;
+        await wait(delayMs);
+      }
+    }
+  }
+
+  const message = lastError instanceof Error ? lastError.message : String(lastError);
+  console.warn(`${warningPrefix} after ${TELEGRAM_SEND_MAX_ATTEMPTS} attempts: ${message}`);
+}
+
+function wait(delayMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, delayMs);
+  });
 }

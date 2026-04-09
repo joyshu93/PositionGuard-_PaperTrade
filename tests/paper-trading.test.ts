@@ -18,11 +18,17 @@ import {
   buildHourlySummaryMessage,
   renderPaperDecisionMessage,
   renderPaperPnlMessage,
+  renderPaperPositionsMessage,
   renderPaperSettingsMessage,
   renderPaperStatusMessage,
 } from "../src/paper/reporting.js";
 import { buildPaperTradeDecisionFromAnalysis } from "../src/paper/strategy.js";
-import { resolvePortfolioMarkPrices, runUserHourlyCycle } from "../src/hourly.js";
+import {
+  executePaperDecision,
+  resolvePortfolioMarkPrices,
+  runHourlyCycleForUserStates,
+  runUserHourlyCycle,
+} from "../src/hourly.js";
 
 const account = {
   id: 1,
@@ -159,8 +165,28 @@ assert(
   "Paper status should explicitly say fills are simulated.",
 );
 assert(
+  renderPaperStatusMessage(performanceSnapshot, "en", "2026-04-06T00:05:00.000Z").includes("query-time public Upbit ticker prices"),
+  "/status should disclose that current prices prefer query-time ticker prices.",
+);
+assert(
+  renderPaperStatusMessage(performanceSnapshot, "en", "2026-04-06T00:05:00.000Z").includes("Queried at: 2026-04-06 09:05:00 KST"),
+  "/status should show the query timestamp when a live price check was performed.",
+);
+assert(
+  renderPaperPositionsMessage(performanceSnapshot, "en", "2026-04-06T00:05:00.000Z").includes("fall back to the latest persisted marks"),
+  "/positions should disclose that live price queries fall back to persisted marks when unavailable.",
+);
+assert(
+  renderPaperPositionsMessage(performanceSnapshot, "en", "2026-04-06T00:05:00.000Z").includes("Queried at: 2026-04-06 09:05:00 KST"),
+  "/positions should show the query timestamp when a live price check was performed.",
+);
+assert(
   renderPaperPnlMessage(performanceSnapshot, "en").includes("Total closed trades: 3"),
   "/pnl should show cumulative closed-trade count.",
+);
+assert(
+  renderPaperPnlMessage(performanceSnapshot, "en").includes("persisted paper-trading state"),
+  "/pnl should disclose that cumulative PnL reporting still reflects persisted paper state.",
 );
 
 const liveMarkedSnapshot = overlayPaperPerformanceLivePrices(
@@ -374,7 +400,8 @@ const confirmedBorderlineEntry = buildPaperTradeDecisionFromAnalysis(
       reasons: [],
       rationale: {
         executionDisposition: "DEFERRED_CONFIRMATION",
-        signalQuality: { bucket: "BORDERLINE" },
+        signalQuality: { bucket: "MEDIUM" },
+        diagnostics: { entryPath: "PULLBACK" },
       },
       referencePrice: 100_000,
       fillPrice: null,
@@ -392,7 +419,7 @@ const confirmedBorderlineEntry = buildPaperTradeDecisionFromAnalysis(
 assertEqual(
   confirmedBorderlineEntry.executionDisposition,
   "EXECUTED_AFTER_CONFIRMATION",
-  "A borderline bullish setup should execute only when the deferred decision came from the immediately previous hourly cycle.",
+  "A borderline bullish setup should execute only when the immediately previous hourly cycle deferred the same setup signature.",
 );
 
 const staleDeferredEntry = buildPaperTradeDecisionFromAnalysis(
@@ -409,7 +436,8 @@ const staleDeferredEntry = buildPaperTradeDecisionFromAnalysis(
       reasons: [],
       rationale: {
         executionDisposition: "DEFERRED_CONFIRMATION",
-        signalQuality: { bucket: "BORDERLINE" },
+        signalQuality: { bucket: "MEDIUM" },
+        diagnostics: { entryPath: "PULLBACK" },
       },
       referencePrice: 100_000,
       fillPrice: null,
@@ -428,6 +456,80 @@ assertEqual(
   staleDeferredEntry.executionDisposition,
   "DEFERRED_CONFIRMATION",
   "Older deferred decisions should not satisfy the one-more-hour confirmation rule.",
+);
+
+const mismatchedPathDeferredEntry = buildPaperTradeDecisionFromAnalysis(
+  createContext({
+    positionQuantity: 0,
+    latestDecision: {
+      id: 13,
+      userId: 1,
+      asset: "BTC",
+      market: "KRW-BTC",
+      action: "ENTRY",
+      executionStatus: "SKIPPED",
+      summary: "Deferred",
+      reasons: [],
+      rationale: {
+        executionDisposition: "DEFERRED_CONFIRMATION",
+        signalQuality: { bucket: "MEDIUM" },
+        diagnostics: { entryPath: "RECLAIM" },
+      },
+      referencePrice: 100_000,
+      fillPrice: null,
+      tradeId: null,
+      createdAt: "2026-04-05T23:10:00.000Z",
+    },
+  }),
+  createAnalysis({
+    regime: "PULLBACK_IN_UPTREND",
+    pullbackZone: true,
+    volumeRecovery: true,
+    trendAlignmentScore: 3,
+    entryPath: "PULLBACK",
+  }),
+);
+assertEqual(
+  mismatchedPathDeferredEntry.executionDisposition,
+  "DEFERRED_CONFIRMATION",
+  "A deferred decision with a different entry path should not satisfy bullish confirmation.",
+);
+
+const mismatchedBucketDeferredEntry = buildPaperTradeDecisionFromAnalysis(
+  createContext({
+    positionQuantity: 0,
+    latestDecision: {
+      id: 14,
+      userId: 1,
+      asset: "BTC",
+      market: "KRW-BTC",
+      action: "ENTRY",
+      executionStatus: "SKIPPED",
+      summary: "Deferred",
+      reasons: [],
+      rationale: {
+        executionDisposition: "DEFERRED_CONFIRMATION",
+        signalQuality: { bucket: "BORDERLINE" },
+        diagnostics: { entryPath: "PULLBACK" },
+      },
+      referencePrice: 100_000,
+      fillPrice: null,
+      tradeId: null,
+      createdAt: "2026-04-05T23:10:00.000Z",
+    },
+  }),
+  createAnalysis({
+    regime: "PULLBACK_IN_UPTREND",
+    pullbackZone: true,
+    volumeRecovery: true,
+    trendAlignmentScore: 3,
+    entryPath: "PULLBACK",
+  }),
+);
+assertEqual(
+  mismatchedBucketDeferredEntry.executionDisposition,
+  "DEFERRED_CONFIRMATION",
+  "A deferred decision with a different signal-quality bucket should not satisfy bullish confirmation.",
 );
 
 const strongImmediateEntry = buildPaperTradeDecisionFromAnalysis(
@@ -564,7 +666,8 @@ const borderlineAdd = buildPaperTradeDecisionFromAnalysis(
       reasons: [],
       rationale: {
         executionDisposition: "DEFERRED_CONFIRMATION",
-        signalQuality: { bucket: "BORDERLINE" },
+        signalQuality: { bucket: "MEDIUM" },
+        diagnostics: { entryPath: "PULLBACK" },
       },
       referencePrice: 100_000,
       fillPrice: null,
@@ -740,6 +843,65 @@ assert(
   "Strong reclaim/recovery structure should still overcome the soft re-entry penalty.",
 );
 
+let thresholdSkipSavedMark: number | null = null;
+const thresholdSkipDecision = buildPaperTradeDecisionFromAnalysis(
+  createContext({ positionQuantity: 0.001 }),
+  createAnalysis({
+    regime: "WEAK_DOWNTREND",
+    riskLevel: "ELEVATED",
+    failedReclaim: true,
+    bearishMomentumExpansion: true,
+    weakeningStage: "CLEAR",
+  }),
+);
+assertEqual(
+  thresholdSkipDecision.action,
+  "REDUCE",
+  "Threshold-skip persistence coverage expects a staged reduce decision from clear weakening.",
+);
+const thresholdSkipResult = await executePaperDecision(
+  {} as never,
+  {
+    userId: 1,
+    asset: "BTC",
+    market: "KRW-BTC",
+    account,
+    position: {
+      id: 7,
+      userId: 1,
+      asset: "BTC",
+      market: "KRW-BTC",
+      quantity: 0.001,
+      averageEntryPrice: 100_000,
+      lastMarkPrice: 100_000,
+      realizedPnl: 0,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    },
+    decision: thresholdSkipDecision,
+    settings: {
+      ...settings,
+      minimumTradeValueKrw: 1_000_000,
+    },
+  },
+  {
+    savePositionSnapshot: async (_db, nextPosition) => {
+      thresholdSkipSavedMark = nextPosition.lastMarkPrice;
+      return nextPosition;
+    },
+  },
+);
+assertEqual(
+  thresholdSkipResult.executed,
+  false,
+  "A threshold-skipped trade should remain non-executed.",
+);
+assertEqual(
+  thresholdSkipSavedMark,
+  thresholdSkipDecision.referencePrice,
+  "When execution is skipped for size, the latest mark should still be persisted for reporting consistency.",
+);
+
 const decisionMessage = renderPaperDecisionMessage(
   {
     latestByAsset: {
@@ -803,6 +965,49 @@ assert(
     decisionMessage.includes("Path: Pullback") &&
     decisionMessage.includes("ETH: Add | Immediate"),
   "/decision should show execution status, signal quality, and the main entry-path diagnostics.",
+);
+
+const decisionMessageKo = renderPaperDecisionMessage(
+  {
+    latestByAsset: {
+      BTC: {
+        id: 1,
+        userId: 1,
+        asset: "BTC",
+        market: "KRW-BTC",
+        action: "ENTRY",
+        executionStatus: "SKIPPED",
+        summary: "BTC entry setup is deferred pending one additional hourly confirmation.",
+        reasons: [
+          "Bullish structure is valid but borderline, so one additional hourly confirmation is required.",
+          "Constructive pullback structure is available.",
+        ],
+        rationale: {
+          executionDisposition: "DEFERRED_CONFIRMATION",
+          signalQuality: { bucket: "BORDERLINE" },
+          diagnostics: {
+            entryPath: "PULLBACK",
+            trendAlignmentScore: 4,
+            recoveryQualityScore: 2,
+            breakdownPressureScore: 1,
+            weakeningStage: "NONE",
+          },
+        },
+        referencePrice: 150_000_000,
+        fillPrice: null,
+        tradeId: null,
+        createdAt: "2026-04-06T01:00:00.000Z",
+      },
+      ETH: null,
+    },
+  },
+  "ko",
+);
+assert(
+  decisionMessageKo.includes("BTC: 진입 | 확인 대기")
+    && decisionMessageKo.includes("BTC 진입 셋업은 한 시간 추가 확인을 위해 보류되었습니다.")
+    && decisionMessageKo.includes("사유: 강세 구조는 유효하지만 경계 구간이라 한 시간 추가 확인이 필요합니다. / 건설적인 눌림 구조가 형성돼 있습니다."),
+  "/decision should localize summary and reasons into Korean when locale is ko.",
 );
 
 let aggregatePersistCalls = 0;
@@ -934,6 +1139,262 @@ assertEqual(
   sentMessages,
   1,
   "A single hourly summary should be sent once per user hourly run when sleep mode is off.",
+);
+
+let summaryFailureAttempts = 0;
+const summaryFailureRun = await runUserHourlyCycle({
+  db: {} as never,
+  telegramClient: {
+    async sendMessage() {
+      summaryFailureAttempts += 1;
+      throw new Error("telegram down");
+    },
+    async answerCallbackQuery() {
+      return;
+    },
+  },
+  userState: {
+    user: {
+      id: 2,
+      telegramUserId: "2",
+      telegramChatId: "200",
+      username: null,
+      displayName: null,
+      locale: "en",
+      trackedAssets: "BTC,ETH",
+      sleepModeEnabled: false,
+      onboardingComplete: true,
+      nextPaperStartCash: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    },
+    accountState: null,
+    positions: {},
+  },
+  upbitBaseUrl: null,
+  paperTradingSettings: settings,
+  ensureAccount: async () => ({ ...account, initialCash: settings.initialPaperCashKrw }),
+  processAssetCycle: async (_db, _client, _userState, asset) => ({
+    action: asset === "BTC" ? "ENTRY" : "HOLD",
+    executed: false,
+    executionDisposition: "SKIPPED",
+    summary: `${asset} summary`,
+    reasons: [],
+    trade: null,
+    updatedAccount: { ...account, initialCash: settings.initialPaperCashKrw },
+    updatedPosition: null,
+    referencePrice: asset === "BTC" ? 100_000 : 3_000_000,
+    fillPrice: null,
+    latestMarketPrice: asset === "BTC" ? 100_000 : 3_000_000,
+  }),
+  fetchMarketSnapshots: async () => ({
+    BTC: {
+      ok: true,
+      snapshot: createContext().marketSnapshot,
+    },
+    ETH: {
+      ok: true,
+      snapshot: {
+        ...createContext().marketSnapshot,
+        market: "KRW-ETH",
+        asset: "ETH",
+        ticker: {
+          ...createContext().marketSnapshot.ticker,
+          market: "KRW-ETH",
+          tradePrice: 3_000_000,
+        },
+      },
+    },
+  }),
+  persistAggregateSnapshot: async () => ({
+    id: 2,
+    userId: 2,
+    accountId: 1,
+    asset: null,
+    cashBalance: account.cashBalance,
+    positionMarketValue: 0,
+    totalEquity: account.cashBalance,
+    realizedPnl: 0,
+    unrealizedPnl: 0,
+    totalReturnPct: 0,
+    createdAt: "2026-01-01T01:00:00.000Z",
+  }),
+  loadPerformanceSnapshot: async () => performanceSnapshot,
+});
+assertEqual(
+  summaryFailureAttempts,
+  3,
+  "Hourly summary delivery should retry a small number of times before giving up.",
+);
+assertEqual(
+  summaryFailureRun.aggregateSnapshotCreated,
+  true,
+  "A Telegram summary failure should not abort the user hourly cycle after persistence completes.",
+);
+
+let summaryRetryAttempts = 0;
+await runUserHourlyCycle({
+  db: {} as never,
+  telegramClient: {
+    async sendMessage() {
+      summaryRetryAttempts += 1;
+      if (summaryRetryAttempts < 3) {
+        throw new Error("telegram transient");
+      }
+    },
+    async answerCallbackQuery() {
+      return;
+    },
+  },
+  userState: {
+    user: {
+      id: 3,
+      telegramUserId: "3",
+      telegramChatId: "300",
+      username: null,
+      displayName: null,
+      locale: "en",
+      trackedAssets: "BTC,ETH",
+      sleepModeEnabled: false,
+      onboardingComplete: true,
+      nextPaperStartCash: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    },
+    accountState: null,
+    positions: {},
+  },
+  upbitBaseUrl: null,
+  paperTradingSettings: settings,
+  ensureAccount: async () => ({ ...account, initialCash: settings.initialPaperCashKrw }),
+  processAssetCycle: async (_db, _client, _userState, asset) => ({
+    action: asset === "BTC" ? "ENTRY" : "HOLD",
+    executed: false,
+    executionDisposition: "SKIPPED",
+    summary: `${asset} summary`,
+    reasons: [],
+    trade: null,
+    updatedAccount: { ...account, initialCash: settings.initialPaperCashKrw },
+    updatedPosition: null,
+    referencePrice: asset === "BTC" ? 100_000 : 3_000_000,
+    fillPrice: null,
+    latestMarketPrice: asset === "BTC" ? 100_000 : 3_000_000,
+  }),
+  fetchMarketSnapshots: async () => ({
+    BTC: {
+      ok: true,
+      snapshot: createContext().marketSnapshot,
+    },
+    ETH: {
+      ok: true,
+      snapshot: {
+        ...createContext().marketSnapshot,
+        market: "KRW-ETH",
+        asset: "ETH",
+        ticker: {
+          ...createContext().marketSnapshot.ticker,
+          market: "KRW-ETH",
+          tradePrice: 3_000_000,
+        },
+      },
+    },
+  }),
+  persistAggregateSnapshot: async () => ({
+    id: 3,
+    userId: 3,
+    accountId: 1,
+    asset: null,
+    cashBalance: account.cashBalance,
+    positionMarketValue: 0,
+    totalEquity: account.cashBalance,
+    realizedPnl: 0,
+    unrealizedPnl: 0,
+    totalReturnPct: 0,
+    createdAt: "2026-01-01T01:00:00.000Z",
+  }),
+  loadPerformanceSnapshot: async () => performanceSnapshot,
+});
+assertEqual(
+  summaryRetryAttempts,
+  3,
+  "Hourly summary delivery should stop retrying once a later attempt succeeds.",
+);
+
+const userStateTemplate = {
+  accountState: null,
+  positions: {},
+};
+const processedUserIds: number[] = [];
+await runHourlyCycleForUserStates({
+  db: {} as never,
+  telegramClient: {
+    async sendMessage() {
+      return;
+    },
+    async answerCallbackQuery() {
+      return;
+    },
+  },
+  userStates: [
+    {
+      ...userStateTemplate,
+      user: {
+        id: 10,
+        telegramUserId: "10",
+        telegramChatId: "10",
+        username: null,
+        displayName: null,
+        locale: "en",
+        trackedAssets: "BTC,ETH",
+        sleepModeEnabled: false,
+        onboardingComplete: true,
+        nextPaperStartCash: null,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    },
+    {
+      ...userStateTemplate,
+      user: {
+        id: 11,
+        telegramUserId: "11",
+        telegramChatId: "11",
+        username: null,
+        displayName: null,
+        locale: "en",
+        trackedAssets: "BTC,ETH",
+        sleepModeEnabled: false,
+        onboardingComplete: true,
+        nextPaperStartCash: null,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    },
+  ],
+  upbitBaseUrl: null,
+  paperTradingSettings: settings,
+  runUserCycle: async ({ userState }) => {
+    processedUserIds.push(userState.user.id);
+    if (userState.user.id === 10) {
+      throw new Error("boom");
+    }
+
+    return {
+      assetResults: [],
+      aggregateSnapshotCreated: true,
+      performanceSnapshot,
+    };
+  },
+});
+assertEqual(
+  processedUserIds.length,
+  2,
+  "A failed user hourly cycle should not stop later users from being processed in the same scheduled run.",
+);
+assertEqual(
+  processedUserIds[1],
+  11,
+  "The scheduler should continue to the next user after logging an earlier user failure.",
 );
 
 function createContext(input?: {

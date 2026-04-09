@@ -237,6 +237,7 @@ Hourly reporting behavior:
 - execution alerts are sent only when a simulated fill is executed
 - one hourly summary is sent after BTC and ETH are both processed
 - hourly summary and execution alerts respect sleep mode
+- Telegram delivery now uses a small bounded retry before finally logging and giving up, so transient send failures are less likely to drop an alert
 - action labels are localized for both English and Korean output
 
 ## Decision Quality Refinements
@@ -246,7 +247,7 @@ This version improves decision quality without adding artificial trade bans such
 The main refinements are:
 
 - hysteresis: it is intentionally harder to switch from flat/HOLD into `ENTRY` or `ADD` than it is to remain on `HOLD`
-- confirmation for borderline bullish setups: weaker but still valid `ENTRY` and `ADD` setups are deferred until the immediately previous hourly cycle showed the same deferred setup again
+- confirmation for borderline bullish setups: weaker but still valid `ENTRY` and `ADD` setups are deferred until the immediately previous hourly cycle showed the same deferred setup signature again (`action + entryPath + signal-quality bucket`)
 - immediate invalidation exits: invalidation-based `EXIT` remains immediate and is never delayed by confirmation logic
 - graduated sizing: stronger constructive structure uses more of the staged allocation, while borderline confirmed structure uses less
 - soft re-entry caution: a recent exit slightly raises the threshold for a fresh `ENTRY`, but strong reclaim/recovery structure can still override it

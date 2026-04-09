@@ -41,6 +41,7 @@ export function getLocalizedPaperActionLabel(
 export function renderPaperStatusMessage(
   snapshot: PaperPerformanceSnapshot,
   locale: SupportedLocale,
+  queriedAt?: string | null,
 ): string {
   return [
     locale === "ko" ? "페이퍼 상태" : "Paper status",
@@ -51,24 +52,33 @@ export function renderPaperStatusMessage(
     `${label(locale, "return")}: ${formatPercent(locale, snapshot.cumulativeReturnPct)}`,
     renderCompactPositionLine("BTC", snapshot, locale),
     renderCompactPositionLine("ETH", snapshot, locale),
+    queriedAt ? getQueryTimeLine(locale, queriedAt) : null,
+    locale === "ko"
+      ? "현재가와 미실현 손익은 조회 시점의 Upbit 공개 티커 가격을 우선 사용합니다."
+      : "Current prices and unrealized values prefer query-time public Upbit ticker prices.",
     locale === "ko"
       ? "모든 체결은 내부 시뮬레이션 기준의 페이퍼 체결입니다."
       : "All fills are internal simulated paper fills.",
-  ].join("\n");
+  ].filter((value): value is string => Boolean(value)).join("\n");
 }
 
 export function renderPaperPositionsMessage(
   snapshot: PaperPerformanceSnapshot,
   locale: SupportedLocale,
+  queriedAt?: string | null,
 ): string {
   return [
     locale === "ko" ? "포지션" : "Positions",
     renderDetailedPositionLine("BTC", snapshot, locale),
     renderDetailedPositionLine("ETH", snapshot, locale),
+    queriedAt ? getQueryTimeLine(locale, queriedAt) : null,
+    locale === "ko"
+      ? "현재가는 조회 시점의 Upbit 공개 티커 가격을 우선 사용하고, 실패 시 최신 저장 mark로 대체합니다."
+      : "Current marks prefer query-time public Upbit ticker prices and fall back to the latest persisted marks if unavailable.",
     locale === "ko"
       ? "BTC/ETH 현물 페이퍼 포지션만 표시합니다."
       : "Showing BTC/ETH spot paper positions only.",
-  ].join("\n");
+  ].filter((value): value is string => Boolean(value)).join("\n");
 }
 
 export function renderPaperPnlMessage(
@@ -88,6 +98,9 @@ export function renderPaperPnlMessage(
         ? na(locale)
         : formatPercent(locale, snapshot.cumulativeWinRate * 100)
     }`,
+    locale === "ko"
+      ? "이 화면은 손익과 누적 성과를 저장된 페이퍼트레이딩 상태 기준으로 보여줍니다."
+      : "This view reflects persisted paper-trading state for PnL and cumulative performance.",
     locale === "ko"
       ? "누적 통계는 저장된 전체 종료 매도 체결 이력 기준입니다."
       : "Cumulative stats are derived from the full persisted closed-trade history.",
@@ -299,7 +312,8 @@ function renderDecisionLine(
   }
 
   const meta = readDecisionMeta(decision.rationale);
-  const reasons = decision.reasons.slice(0, 2).join(" / ");
+  const localizedReasons = decision.reasons.slice(0, 2).map((reason) => localizeDecisionText(locale, reason));
+  const localizedSummary = localizeDecisionText(locale, decision.summary);
   const detailLine = [
     `${locale === "ko" ? "경로" : "Path"}: ${getEntryPathLabel(locale, meta.entryPath)}`,
     `${locale === "ko" ? "추세 정렬" : "Trend"} ${formatScore(meta.trendAlignmentScore, 5)}`,
@@ -314,11 +328,82 @@ function renderDecisionLine(
     meta.weakeningStage !== "NONE"
       ? `${locale === "ko" ? "약화 단계" : "Weakening"}: ${getWeakeningStageLabel(locale, meta.weakeningStage)}`
       : null,
-    decision.summary,
-    `${locale === "ko" ? "사유" : "Reasons"}: ${reasons || na(locale)}`,
+    localizedSummary,
+    `${locale === "ko" ? "사유" : "Reasons"}: ${(localizedReasons.join(" / ")) || na(locale)}`,
     `${locale === "ko" ? "기준가" : "Reference"}: ${decision.referencePrice > 0 ? formatKrw(locale, decision.referencePrice) : na(locale)}`,
     `${locale === "ko" ? "시각" : "At"}: ${formatCompactTimestampForLocale(locale, decision.createdAt)}`,
   ].filter((value): value is string => Boolean(value)).join("\n");
+}
+
+function localizeDecisionText(locale: SupportedLocale, text: string): string {
+  if (locale !== "ko") {
+    return text;
+  }
+
+  const exactMap: Record<string, string> = {
+    "Higher-timeframe support has broken or invalidation is already broken.": "상위 타임프레임 지지가 깨졌거나 invalidation이 이미 무너졌습니다.",
+    "Invalidation-first exit remains immediate and unchanged.": "invalidation 우선 청산은 지연 없이 즉시 유지됩니다.",
+    "Constructive structure is strong enough to act immediately.": "구조적 강세 품질이 충분해 즉시 대응할 수 있습니다.",
+    "Bullish structure is valid but borderline, so one additional hourly confirmation is required.": "강세 구조는 유효하지만 경계 구간이라 한 시간 추가 확인이 필요합니다.",
+    "Borderline bullish structure held for one additional hourly confirmation.": "경계 구간 강세 구조가 한 시간 추가 확인을 버텼습니다.",
+    "Exposure guardrails leave no room for additional risk right now.": "현재 익스포저 가드레일상 추가 위험을 더할 여유가 없습니다.",
+    "Price is too extended for a no-chase entry.": "추격매수를 피하기엔 가격이 너무 많이 확장됐습니다.",
+    "Bullish structure is not strong enough to justify a fresh entry.": "새 진입을 정당화할 만큼 강세 구조가 충분히 강하지 않습니다.",
+    "Recent exit caution slightly raised the entry threshold and the recovery quality is not strong enough yet.": "최근 청산 경계로 진입 기준이 약간 높아졌고, 아직 회복 품질이 충분하지 않습니다.",
+    "Bullish score did not clear the entry hysteresis threshold.": "강세 점수가 진입 hysteresis 기준을 넘지 못했습니다.",
+    "Existing position is still valid, but mild weakening means add quality is not strong enough yet.": "기존 포지션은 아직 유효하지만 약한 약화가 있어 추가매수 품질이 아직 충분하지 않습니다.",
+    "Existing position remains valid, but add quality needs stronger trend alignment and recovery structure.": "기존 포지션은 유효하지만 추가매수에는 더 강한 추세 정렬과 회복 구조가 필요합니다.",
+    "Exposure guardrails leave no room for an additional add.": "익스포저 가드레일상 추가매수를 더할 여유가 없습니다.",
+    "Constructive add quality is strong enough for an immediate staged add.": "구조적 추가매수 품질이 충분해 즉시 분할 추가매수가 가능합니다.",
+    "Borderline add setup stayed constructive for one more hourly confirmation.": "경계 구간 추가매수 셋업이 한 시간 더 건설적으로 유지됐습니다.",
+    "Add setup is valid but borderline, so execution is deferred pending one more hourly confirmation.": "추가매수 셋업은 유효하지만 경계 구간이라 한 시간 추가 확인 후 실행합니다.",
+    "Existing hold remains valid, but add quality did not clear the stricter add threshold.": "기존 보유는 유효하지만 추가매수 품질이 더 엄격한 add 기준을 넘지 못했습니다.",
+    "Weakening is still soft, so any reduction stays modest and mainly protects open gains.": "약화는 아직 초기 단계라 감축은 작게 가져가며 열린 수익 보호가 우선입니다.",
+    "Multiple weakness signals are aligned, so a staged reduction is justified.": "여러 약세 신호가 정렬돼 있어 분할 감축이 정당화됩니다.",
+    "Weakness is present, but reduction remains staged rather than full exit.": "약화는 있지만 전량 청산보다는 단계적 감축으로 대응합니다.",
+    "Weakening has become clear enough that a larger staged reduction is now justified.": "약화가 충분히 명확해져 더 큰 단계적 감축이 정당화됩니다.",
+    "Weakening evidence cleared the reduce hysteresis threshold.": "약화 증거가 reduce hysteresis 기준을 넘었습니다.",
+    "Reclaim structure is intact.": "리클레임 구조가 유지되고 있습니다.",
+    "Breakout-hold structure is intact.": "돌파 후 지지 구조가 유지되고 있습니다.",
+    "Constructive pullback structure is available.": "건설적인 눌림 구조가 형성돼 있습니다.",
+    "No constructive entry path is active.": "활성화된 건설적 진입 경로가 없습니다.",
+    "Recent exit caution slightly raised the re-entry threshold, but the current structure still cleared it.": "최근 청산 경계로 재진입 기준이 약간 높아졌지만 현재 구조는 이를 여전히 통과했습니다.",
+    "No recent-exit caution is suppressing the setup.": "최근 청산 경계가 현재 셋업을 누르고 있지 않습니다.",
+    "Reclaim paths can add faster than raw pullbacks, but only when continuation quality stays healthy.": "리클레임 경로는 단순 눌림보다 빠르게 추가매수할 수 있지만, 이어지는 품질이 건강할 때만 허용됩니다.",
+    "Reclaim paths can clear a slightly faster threshold when recovery quality is already convincing.": "리클레임 경로는 회복 품질이 충분히 설득력 있을 때 조금 더 빠른 기준을 통과할 수 있습니다.",
+    "Breakout-hold paths require stronger confirmation so continuation entries do not turn into chase buying.": "돌파 후 지지 경로는 추격매수가 되지 않도록 더 강한 확인을 요구합니다.",
+    "Pullback adds stay stricter than fresh entries, especially when the pullback is not clearly lower in the range.": "눌림 추가매수는 신규 진입보다 더 엄격하며, 특히 눌림이 범위 하단이 아닐수록 더 그렇습니다.",
+    "Pullback entries still need a constructive lower-range structure or clear recovery support.": "눌림 진입도 하단 구조의 건설성이나 명확한 회복 지지가 필요합니다.",
+  };
+
+  const summaryMap: Array<[RegExp, string]> = [
+    [/^(BTC|ETH) paper exit is required because invalidation has failed\.$/, "$1 청산이 필요합니다. invalidation이 무너졌습니다."],
+    [/^(BTC|ETH) entry setup is deferred pending one additional hourly confirmation\.$/, "$1 진입 셋업은 한 시간 추가 확인을 위해 보류되었습니다."],
+    [/^(BTC|ETH) add setup is deferred pending one additional hourly confirmation\.$/, "$1 추가매수 셋업은 한 시간 추가 확인을 위해 보류되었습니다."],
+    [/^(BTC|ETH) paper entry is allowed by constructive structure\.$/, "$1 진입이 허용됩니다. 건설적인 구조가 확인됐습니다."],
+    [/^(BTC|ETH) paper add is allowed by constructive structure\.$/, "$1 추가매수가 허용됩니다. 건설적인 구조가 확인됐습니다."],
+    [/^(BTC|ETH) paper reduction is allowed because weakening is now sufficiently clear\.$/, "$1 비중축소가 허용됩니다. 약화가 충분히 명확해졌습니다."],
+    [/^(BTC|ETH) stays on hold while the existing paper position remains valid\.$/, "$1는 관망입니다. 기존 페이퍼 포지션이 아직 유효합니다."],
+    [/^(BTC|ETH) stays on hold because entry quality is not strong enough yet\.$/, "$1는 관망입니다. 아직 진입 품질이 충분히 강하지 않습니다."],
+  ];
+
+  const regimeMatch = text.match(/^Regime is ([A-Z_]+)\.$/);
+  if (regimeMatch) {
+    return `레짐: ${regimeMatch[1]}.`;
+  }
+
+  const weakeningMatch = text.match(/^Weakening stage is ([A-Z_]+)\.$/);
+  if (weakeningMatch) {
+    return `약화 단계: ${weakeningMatch[1]}.`;
+  }
+
+  for (const [pattern, replacement] of summaryMap) {
+    if (pattern.test(text)) {
+      return text.replace(pattern, replacement);
+    }
+  }
+
+  return exactMap[text] ?? text;
 }
 
 function renderActionCounts(
@@ -442,7 +527,7 @@ function getEntryPathLabel(locale: SupportedLocale, entryPath: EntryPath): strin
   const ko: Record<EntryPath, string> = {
     PULLBACK: "눌림",
     RECLAIM: "리클레임",
-    BREAKOUT_HOLD: "돌파 후 유지",
+    BREAKOUT_HOLD: "돌파 후 지지",
     NONE: "없음",
   };
   const en: Record<EntryPath, string> = {
@@ -565,13 +650,19 @@ function summarizeSettingsSource(
   const envOverrides = Object.values(settings.sourceByField).filter((value) => value === "env").length;
   if (envOverrides === 0) {
     return locale === "ko"
-      ? "현재 적용값은 모두 코드 기본 설정에서 왔습니다."
+      ? "현재 모든 값은 코드 기본 설정에서 왔습니다."
       : "All active values currently come from code defaults.";
   }
 
   return locale === "ko"
     ? `현재 ${envOverrides}개 항목이 환경값으로 덮어써져 있습니다.`
     : `${envOverrides} field(s) currently come from environment overrides.`;
+}
+
+function getQueryTimeLine(locale: SupportedLocale, queriedAt: string): string {
+  return locale === "ko"
+    ? `조회 시각: ${formatCompactTimestampForLocale(locale, queriedAt)}`
+    : `Queried at: ${formatCompactTimestampForLocale(locale, queriedAt)}`;
 }
 
 function na(locale: SupportedLocale): string {

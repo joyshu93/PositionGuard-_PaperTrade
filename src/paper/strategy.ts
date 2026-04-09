@@ -19,6 +19,14 @@ const HEALTHY_HOLD_REDUCE_THRESHOLD = 5;
 const RECENT_EXIT_PENALTY_HOURS = 24;
 const RECENT_LOSS_EXIT_PENALTY_HOURS = 12;
 const HOURLY_CONFIRMATION_WINDOW_MS = 60 * 60 * 1000;
+const SIGNAL_QUALITY_BUCKETS = ["LOW", "BORDERLINE", "MEDIUM", "HIGH"] as const;
+const ENTRY_PATHS = ["NONE", "PULLBACK", "RECLAIM", "BREAKOUT_HOLD"] as const;
+
+type BullishConfirmationSignature = {
+  action: "ENTRY" | "ADD";
+  entryPath: PositionStructureAnalysis["entryPath"];
+  qualityBucket: SignalQualityBucket;
+};
 
 export function decidePaperTrade(context: PaperTradingContext): PaperTradingDecision {
   const analysis = analyzePositionStructure(
@@ -199,7 +207,10 @@ function decideFlatPositionAction(input: {
   }
 
   if (bullishScore >= thresholds.borderline) {
-    const confirmationSatisfied = hasPendingBullishConfirmation(context, "ENTRY");
+    const confirmationSatisfied = hasPendingBullishConfirmation(
+      context,
+      buildBullishConfirmationSignature("ENTRY", analysis, qualityBucket),
+    );
     return bullishDecision({
       context,
       analysis,
@@ -321,7 +332,10 @@ function decideAddOrHoldAction(input: {
   }
 
   if (bullishScore >= thresholds.borderline) {
-    const confirmationSatisfied = hasPendingBullishConfirmation(context, "ADD");
+    const confirmationSatisfied = hasPendingBullishConfirmation(
+      context,
+      buildBullishConfirmationSignature("ADD", analysis, qualityBucket),
+    );
     return bullishDecision({
       context,
       analysis,
@@ -535,16 +549,34 @@ function hasBullishRiskCapacity(
 
 function hasPendingBullishConfirmation(
   context: PaperTradingContext,
-  action: "ENTRY" | "ADD",
+  signature: BullishConfirmationSignature,
 ): boolean {
   const latestDecision = context.latestDecision;
-  if (!latestDecision || latestDecision.action !== action || latestDecision.executionStatus !== "SKIPPED") {
+  if (
+    !latestDecision
+    || latestDecision.action !== signature.action
+    || latestDecision.executionStatus !== "SKIPPED"
+  ) {
     return false;
   }
 
   const rationale = readDecisionRationale(latestDecision.rationale);
   return rationale.executionDisposition === "DEFERRED_CONFIRMATION"
+    && rationale.entryPath === signature.entryPath
+    && rationale.qualityBucket === signature.qualityBucket
     && isImmediatePreviousHourlyDecision(latestDecision.createdAt, context.generatedAt);
+}
+
+function buildBullishConfirmationSignature(
+  action: "ENTRY" | "ADD",
+  analysis: PositionStructureAnalysis,
+  qualityBucket: SignalQualityBucket,
+): BullishConfirmationSignature {
+  return {
+    action,
+    entryPath: analysis.entryPath,
+    qualityBucket,
+  };
 }
 
 function isImmediatePreviousHourlyDecision(
@@ -909,15 +941,46 @@ function toQualityBucket(score: number): SignalQualityBucket {
 
 function readDecisionRationale(rationale: unknown): {
   executionDisposition?: DecisionExecutionDisposition;
+  entryPath?: PositionStructureAnalysis["entryPath"];
+  qualityBucket?: SignalQualityBucket;
 } {
   if (!rationale || typeof rationale !== "object") {
     return {};
   }
 
   const value = rationale as Record<string, unknown>;
+
+  const next: {
+    executionDisposition?: DecisionExecutionDisposition;
+    entryPath?: PositionStructureAnalysis["entryPath"];
+    qualityBucket?: SignalQualityBucket;
+  } = {};
+
   if (typeof value.executionDisposition === "string") {
-    return { executionDisposition: value.executionDisposition as DecisionExecutionDisposition };
+    next.executionDisposition = value.executionDisposition as DecisionExecutionDisposition;
   }
 
-  return {};
+  if (value.signalQuality && typeof value.signalQuality === "object") {
+    const bucket = (value.signalQuality as Record<string, unknown>).bucket;
+    if (typeof bucket === "string" && isSignalQualityBucket(bucket)) {
+      next.qualityBucket = bucket;
+    }
+  }
+
+  if (value.diagnostics && typeof value.diagnostics === "object") {
+    const entryPath = (value.diagnostics as Record<string, unknown>).entryPath;
+    if (typeof entryPath === "string" && isEntryPath(entryPath)) {
+      next.entryPath = entryPath;
+    }
+  }
+
+  return next;
+}
+
+function isSignalQualityBucket(value: string): value is SignalQualityBucket {
+  return (SIGNAL_QUALITY_BUCKETS as readonly string[]).includes(value);
+}
+
+function isEntryPath(value: string): value is PositionStructureAnalysis["entryPath"] {
+  return (ENTRY_PATHS as readonly string[]).includes(value);
 }

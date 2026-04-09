@@ -45,7 +45,7 @@ At this stage the repository must not implement:
 5. Analyze market structure.
 6. Apply deterministic action rules.
 7. Apply hysteresis so that switching into bullish action requires more evidence than simply remaining on `HOLD`.
-8. For borderline `ENTRY` and `ADD` setups, defer once and require the same deferred setup to have appeared in the immediately previous hourly cycle before execution.
+8. For borderline `ENTRY` and `ADD` setups, defer once and require the same deferred setup signature (`action + entryPath + signal-quality bucket`) to have appeared in the immediately previous hourly cycle before execution.
 9. If action is not deferred or `HOLD`, calculate a simulated fill using explicit fee, slippage, sizing, and exposure guardrails.
 10. Persist updated paper account, position, trade, equity snapshot, and strategy decision state.
 11. Send Telegram execution summary when a simulated fill occurs.
