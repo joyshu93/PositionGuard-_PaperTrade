@@ -247,6 +247,10 @@ The main refinements are:
 - entry paths are now explicit so a bullish setup is inspectable as a pullback, reclaim, or breakout-hold path
 - add logic is stricter than entry logic: an existing position must still be healthy and aligned before staged adds are allowed
 - decision diagnostics now expose trend alignment, recovery quality, and breakdown pressure so operator review is less guessy
+- reclaim paths can clear slightly faster bullish thresholds when recovery quality and trend alignment are already strong
+- breakout-hold paths use stricter thresholds so continuation setups need more confirmation and are less likely to become chase buys
+- pullback adds are stricter than pullback entries, especially when the pullback is not clearly lower in the range
+- soft weakening can trigger only a modest protective `REDUCE`, while clear weakening can justify a larger staged reduction
 
 These are decision-quality refinements, not mechanical trade-frequency bans.
 

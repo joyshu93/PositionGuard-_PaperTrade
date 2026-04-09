@@ -128,6 +128,7 @@ Decision output may also include:
 - execution disposition such as `IMMEDIATE`, `DEFERRED_CONFIRMATION`, or `EXECUTED_AFTER_CONFIRMATION`
 - explicit exposure guardrail state
 - decision diagnostics such as entry path, trend alignment, recovery quality, breakdown pressure, and weakening stage
+- path-sensitive bullish thresholds, so reclaim, pullback, and breakout-hold setups do not all clear at the same score
 
 Allowed action values:
 
@@ -149,6 +150,9 @@ Execution remains internal only.
 - exposure guardrails must stay explicit via per-asset max allocation and total portfolio max exposure
 - borderline bullish confirmation is allowed, but invalidation-based exits must never be delayed
 - `ADD` must remain stricter than `ENTRY`; an existing hold has to stay healthy and aligned before staged adds are allowed
+- reclaim continuation may clear faster than a raw pullback when recovery quality is already strong
+- breakout-hold continuation must remain stricter than reclaim so continuation trades do not become chase buying
+- soft weakening may allow only a small protective `REDUCE`; clear weakening is required for larger staged reductions
 - cash must never go negative
 - quantity must never go negative
 

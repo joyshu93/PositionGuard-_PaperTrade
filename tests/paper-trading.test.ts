@@ -273,6 +273,53 @@ assert(
   "Borderline bullish setups should defer ENTRY pending one more hourly confirmation.",
 );
 
+const reclaimImmediateEntry = buildPaperTradeDecisionFromAnalysis(
+  createContext({ positionQuantity: 0 }),
+  createAnalysis({
+    regime: "RECLAIM_ATTEMPT",
+    pullbackZone: false,
+    reclaimStructure: true,
+    breakoutHoldStructure: false,
+    volumeRecovery: true,
+    macdImproving: false,
+    rsiRecovery: false,
+    entryPath: "RECLAIM",
+    trendAlignmentScore: 4,
+    recoveryQualityScore: 3,
+  }),
+);
+assert(
+  reclaimImmediateEntry.action === "ENTRY" &&
+    reclaimImmediateEntry.executionDisposition === "IMMEDIATE",
+  "Reclaim entries should be able to act faster than comparable raw pullbacks once recovery quality is strong enough.",
+);
+
+const breakoutHoldDeferredEntry = buildPaperTradeDecisionFromAnalysis(
+  createContext({ positionQuantity: 0 }),
+  createAnalysis({
+    regime: "BULL_TREND",
+    pullbackZone: false,
+    reclaimStructure: false,
+    breakoutHoldStructure: true,
+    volumeRecovery: true,
+    macdImproving: false,
+    rsiRecovery: false,
+    entryPath: "BREAKOUT_HOLD",
+    trendAlignmentScore: 3,
+    recoveryQualityScore: 2,
+    timeframes: {
+      "1h": createTimeframeStructure("1h", "UPPER"),
+      "4h": createTimeframeStructure("4h", "MIDDLE"),
+      "1d": createTimeframeStructure("1d", "MIDDLE"),
+    },
+  }),
+);
+assert(
+  breakoutHoldDeferredEntry.action === "ENTRY" &&
+    breakoutHoldDeferredEntry.executionDisposition === "DEFERRED_CONFIRMATION",
+  "Breakout-hold entries should demand stronger confirmation so continuation setups do not become chase buys.",
+);
+
 const confirmedBorderlineEntry = buildPaperTradeDecisionFromAnalysis(
   createContext({
     positionQuantity: 0,
@@ -415,6 +462,41 @@ assert(
   "Reduce sizing should scale up as weakening becomes more clearly confirmed.",
 );
 
+const softProtectiveReduce = buildPaperTradeDecisionFromAnalysis(
+  createContext({ positionQuantity: 1 }),
+  createAnalysis({
+    regime: "PULLBACK_IN_UPTREND",
+    currentPrice: 105_000,
+    pnlPct: 0.05,
+    failedReclaim: true,
+    upperRangeChase: true,
+    breakdownPressureScore: 2,
+    weakeningStage: "SOFT",
+  }),
+);
+assert(
+  softProtectiveReduce.action === "REDUCE" &&
+    (softProtectiveReduce.targetQuantityFraction ?? 0) < (moderateReduce.targetQuantityFraction ?? 0),
+  "Soft weakening should only allow a modest protective reduction, smaller than a clear-weakness reduce.",
+);
+
+const softWeakeningHoldWithoutProfit = buildPaperTradeDecisionFromAnalysis(
+  createContext({ positionQuantity: 1 }),
+  createAnalysis({
+    regime: "PULLBACK_IN_UPTREND",
+    currentPrice: 98_000,
+    pnlPct: -0.02,
+    failedReclaim: true,
+    breakdownPressureScore: 2,
+    weakeningStage: "SOFT",
+  }),
+);
+assertEqual(
+  softWeakeningHoldWithoutProfit.action,
+  "HOLD",
+  "Soft weakening without a profit buffer should not force a protective reduce by itself.",
+);
+
 const strongAdd = buildPaperTradeDecisionFromAnalysis(
   createContext({ positionQuantity: 1 }),
   createAnalysis({
@@ -467,6 +549,45 @@ assert(
     borderlineAdd.action === "ADD" &&
     strongAdd.targetCashToUse > borderlineAdd.targetCashToUse,
   "Bullish sizing should be more aggressive for stronger constructive structure than for confirmed borderline adds.",
+);
+
+const reclaimAddImmediate = buildPaperTradeDecisionFromAnalysis(
+  createContext({ positionQuantity: 1 }),
+  createAnalysis({
+    regime: "RECLAIM_ATTEMPT",
+    pullbackZone: false,
+    reclaimStructure: true,
+    breakoutHoldStructure: false,
+    volumeRecovery: true,
+    entryPath: "RECLAIM",
+    trendAlignmentScore: 4,
+    recoveryQualityScore: 3,
+  }),
+);
+const breakoutAddDeferred = buildPaperTradeDecisionFromAnalysis(
+  createContext({ positionQuantity: 1 }),
+  createAnalysis({
+    regime: "BULL_TREND",
+    pullbackZone: false,
+    reclaimStructure: false,
+    breakoutHoldStructure: true,
+    volumeRecovery: true,
+    entryPath: "BREAKOUT_HOLD",
+    trendAlignmentScore: 3,
+    recoveryQualityScore: 2,
+    timeframes: {
+      "1h": createTimeframeStructure("1h", "UPPER"),
+      "4h": createTimeframeStructure("4h", "MIDDLE"),
+      "1d": createTimeframeStructure("1d", "MIDDLE"),
+    },
+  }),
+);
+assert(
+  reclaimAddImmediate.action === "ADD" &&
+    reclaimAddImmediate.executionDisposition === "IMMEDIATE" &&
+    breakoutAddDeferred.action === "ADD" &&
+    breakoutAddDeferred.executionDisposition === "DEFERRED_CONFIRMATION",
+  "Add logic should also distinguish faster reclaim continuation from stricter breakout continuation.",
 );
 
 const addBlockedByWeakening = buildPaperTradeDecisionFromAnalysis(

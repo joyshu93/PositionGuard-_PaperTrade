@@ -137,6 +137,7 @@ function decideFlatPositionAction(input: {
   exposureGuardrails: PaperTradingDecision["exposureGuardrails"];
 }): PaperTradingDecision {
   const { context, analysis, bullishScore, qualityBucket, reentryPenaltyApplied, diagnostics, exposureGuardrails } = input;
+  const thresholds = getBullishThresholds("ENTRY", analysis);
 
   if (!isConstructiveBullishCandidate(analysis)) {
     return holdDecision(
@@ -172,7 +173,7 @@ function decideFlatPositionAction(input: {
     );
   }
 
-  if (bullishScore >= ENTRY_STRONG_THRESHOLD) {
+  if (bullishScore >= thresholds.strong) {
     return bullishDecision({
       context,
       analysis,
@@ -192,11 +193,12 @@ function decideFlatPositionAction(input: {
       extraReasons: [
         `Regime is ${analysis.regime}.`,
         "Constructive structure is strong enough to act immediately.",
+        getBullishThresholdReason("ENTRY", analysis),
       ],
     });
   }
 
-  if (bullishScore >= ENTRY_BORDERLINE_THRESHOLD) {
+  if (bullishScore >= thresholds.borderline) {
     const confirmationSatisfied = hasPendingBullishConfirmation(context, "ENTRY");
     return bullishDecision({
       context,
@@ -218,10 +220,12 @@ function decideFlatPositionAction(input: {
         ? [
             `Regime is ${analysis.regime}.`,
             "Borderline bullish structure held for one additional hourly confirmation.",
+            getBullishThresholdReason("ENTRY", analysis),
           ]
         : [
             `Regime is ${analysis.regime}.`,
             "Bullish structure is valid but borderline, so one additional hourly confirmation is required.",
+            getBullishThresholdReason("ENTRY", analysis),
           ],
     });
   }
@@ -234,6 +238,7 @@ function decideFlatPositionAction(input: {
       reentryPenaltyApplied
         ? "Recent exit caution slightly raised the entry threshold and the recovery quality is not strong enough yet."
         : "Bullish score did not clear the entry hysteresis threshold.",
+      getBullishThresholdReason("ENTRY", analysis),
     ],
     diagnostics,
     exposureGuardrails,
@@ -253,6 +258,7 @@ function decideAddOrHoldAction(input: {
   exposureGuardrails: PaperTradingDecision["exposureGuardrails"];
 }): PaperTradingDecision {
   const { context, analysis, bullishScore, qualityBucket, reentryPenaltyApplied, diagnostics, exposureGuardrails } = input;
+  const thresholds = getBullishThresholds("ADD", analysis);
 
   if (!isConstructiveAddCandidate(analysis)) {
     return holdDecision(
@@ -263,6 +269,7 @@ function decideAddOrHoldAction(input: {
         analysis.weakeningStage === "SOFT"
           ? "Existing position is still valid, but mild weakening means add quality is not strong enough yet."
           : "Existing position remains valid, but add quality needs stronger trend alignment and recovery structure.",
+        getBullishThresholdReason("ADD", analysis),
       ],
       diagnostics,
       exposureGuardrails,
@@ -288,7 +295,7 @@ function decideAddOrHoldAction(input: {
     );
   }
 
-  if (bullishScore >= ADD_STRONG_THRESHOLD) {
+  if (bullishScore >= thresholds.strong) {
     return bullishDecision({
       context,
       analysis,
@@ -308,11 +315,12 @@ function decideAddOrHoldAction(input: {
       extraReasons: [
         `Regime is ${analysis.regime}.`,
         "Constructive add quality is strong enough for an immediate staged add.",
+        getBullishThresholdReason("ADD", analysis),
       ],
     });
   }
 
-  if (bullishScore >= ADD_BORDERLINE_THRESHOLD) {
+  if (bullishScore >= thresholds.borderline) {
     const confirmationSatisfied = hasPendingBullishConfirmation(context, "ADD");
     return bullishDecision({
       context,
@@ -334,10 +342,12 @@ function decideAddOrHoldAction(input: {
         ? [
             `Regime is ${analysis.regime}.`,
             "Borderline add setup stayed constructive for one more hourly confirmation.",
+            getBullishThresholdReason("ADD", analysis),
           ]
         : [
             `Regime is ${analysis.regime}.`,
             "Add setup is valid but borderline, so execution is deferred pending one more hourly confirmation.",
+            getBullishThresholdReason("ADD", analysis),
           ],
     });
   }
@@ -348,6 +358,7 @@ function decideAddOrHoldAction(input: {
     [
       `Regime is ${analysis.regime}.`,
       "Existing hold remains valid, but add quality did not clear the stricter add threshold.",
+      getBullishThresholdReason("ADD", analysis),
     ],
     diagnostics,
     exposureGuardrails,
@@ -366,17 +377,11 @@ function decideReduceAction(input: {
   reentryPenaltyApplied: boolean;
 }): PaperTradingDecision | null {
   const { context, analysis, weaknessEvidence, diagnostics, exposureGuardrails, reentryPenaltyApplied } = input;
-  const reduceThreshold = isHealthyHoldState(analysis)
-    ? HEALTHY_HOLD_REDUCE_THRESHOLD
-    : REDUCE_THRESHOLD;
   const weaknessScore = computeWeaknessScore(analysis);
-
-  if (weaknessScore < reduceThreshold) {
+  const reducePlan = getStructuredReducePlan(context, analysis, weaknessScore);
+  if (!reducePlan) {
     return null;
   }
-
-  const reduceFraction = getGraduatedReduceFraction(weaknessScore, context);
-  const qualityBucket = weaknessScore >= 7 ? "HIGH" : weaknessScore >= 5 ? "MEDIUM" : "BORDERLINE";
 
   return {
     action: "REDUCE",
@@ -384,17 +389,18 @@ function decideReduceAction(input: {
     reasons: [
       `Regime is ${analysis.regime}.`,
       `Weakening stage is ${analysis.weakeningStage}.`,
+      ...reducePlan.reasons,
       weaknessEvidence >= 3
         ? "Multiple weakness signals are aligned, so a staged reduction is justified."
         : "Weakness is present, but reduction remains staged rather than full exit.",
     ],
     targetCashToUse: 0,
-    targetQuantityFraction: reduceFraction,
+    targetQuantityFraction: reducePlan.reduceFraction,
     referencePrice: analysis.currentPrice,
     executionDisposition: "IMMEDIATE",
     signalQuality: {
       score: weaknessScore,
-      bucket: qualityBucket,
+      bucket: reducePlan.qualityBucket,
       confirmationRequired: false,
       confirmationSatisfied: false,
       reentryPenaltyApplied,
@@ -607,6 +613,55 @@ function computeWeaknessScore(analysis: PositionStructureAnalysis): number {
   return score;
 }
 
+function getBullishThresholds(
+  action: "ENTRY" | "ADD",
+  analysis: PositionStructureAnalysis,
+): {
+  strong: number;
+  borderline: number;
+} {
+  let strong = action === "ENTRY" ? ENTRY_STRONG_THRESHOLD : ADD_STRONG_THRESHOLD;
+  let borderline = action === "ENTRY" ? ENTRY_BORDERLINE_THRESHOLD : ADD_BORDERLINE_THRESHOLD;
+
+  switch (analysis.entryPath) {
+    case "RECLAIM":
+      if (analysis.recoveryQualityScore >= 3 && analysis.trendAlignmentScore >= 3) {
+        strong -= 1;
+        borderline -= 1;
+      }
+      break;
+    case "BREAKOUT_HOLD":
+      strong += 1;
+      borderline += 1;
+      if (analysis.timeframes["1h"].location === "UPPER") {
+        strong += 1;
+        borderline += 1;
+      }
+      break;
+    case "PULLBACK":
+      if (action === "ADD") {
+        strong += 1;
+        borderline += 1;
+      }
+      if (analysis.timeframes["1h"].location !== "LOWER" && analysis.timeframes["4h"].location !== "LOWER") {
+        strong += 1;
+        borderline += 1;
+      }
+      break;
+    case "NONE":
+    default:
+      break;
+  }
+
+  if (analysis.breakdownPressureScore >= 2 && action === "ADD") {
+    strong += 1;
+    borderline += 1;
+  }
+
+  borderline = Math.min(borderline, strong - 1);
+  return { strong, borderline };
+}
+
 function countBullishEvidence(analysis: PositionStructureAnalysis): number {
   return [
     analysis.pullbackZone,
@@ -655,6 +710,27 @@ function isConstructiveAddCandidate(analysis: PositionStructureAnalysis): boolea
     );
 }
 
+function getBullishThresholdReason(
+  action: "ENTRY" | "ADD",
+  analysis: PositionStructureAnalysis,
+): string {
+  switch (analysis.entryPath) {
+    case "RECLAIM":
+      return action === "ADD"
+        ? "Reclaim paths can add faster than raw pullbacks, but only when continuation quality stays healthy."
+        : "Reclaim paths can clear a slightly faster threshold when recovery quality is already convincing.";
+    case "BREAKOUT_HOLD":
+      return "Breakout-hold paths require stronger confirmation so continuation entries do not turn into chase buying.";
+    case "PULLBACK":
+      return action === "ADD"
+        ? "Pullback adds stay stricter than fresh entries, especially when the pullback is not clearly lower in the range."
+        : "Pullback entries still need a constructive lower-range structure or clear recovery support.";
+    case "NONE":
+    default:
+      return "No constructive entry path is active.";
+  }
+}
+
 function hasConstructivePullbackQuality(analysis: PositionStructureAnalysis): boolean {
   return analysis.pullbackZone && (
     analysis.timeframes["1h"].location === "LOWER"
@@ -686,6 +762,66 @@ function getGraduatedReduceFraction(
     return Math.min(0.75, base * 1.2);
   }
   return Math.max(0.2, base * 0.65);
+}
+
+function getStructuredReducePlan(
+  context: PaperTradingContext,
+  analysis: PositionStructureAnalysis,
+  weaknessScore: number,
+): {
+  reduceFraction: number;
+  qualityBucket: SignalQualityBucket;
+  reasons: string[];
+} | null {
+  const hasProfitBuffer = analysis.pnlPct >= 0.02;
+
+  if (analysis.weakeningStage === "SOFT") {
+    if (!hasProfitBuffer || (!analysis.failedReclaim && !analysis.upperRangeChase && analysis.breakdownPressureScore < 2)) {
+      return null;
+    }
+
+    return {
+      reduceFraction: getSoftReduceFraction(context, analysis),
+      qualityBucket: "BORDERLINE",
+      reasons: [
+        "Weakening is still soft, so any reduction stays modest and mainly protects open gains.",
+      ],
+    };
+  }
+
+  const reduceThreshold = analysis.weakeningStage === "CLEAR"
+    ? Math.max(3, (isHealthyHoldState(analysis) ? HEALTHY_HOLD_REDUCE_THRESHOLD : REDUCE_THRESHOLD) - 1)
+    : isHealthyHoldState(analysis)
+      ? HEALTHY_HOLD_REDUCE_THRESHOLD
+      : REDUCE_THRESHOLD;
+
+  if (weaknessScore < reduceThreshold) {
+    return null;
+  }
+
+  return {
+    reduceFraction: getGraduatedReduceFraction(weaknessScore, context),
+    qualityBucket: weaknessScore >= 7 ? "HIGH" : weaknessScore >= 5 ? "MEDIUM" : "BORDERLINE",
+    reasons: [
+      analysis.weakeningStage === "CLEAR"
+        ? "Weakening has become clear enough that a larger staged reduction is now justified."
+        : "Weakening evidence cleared the reduce hysteresis threshold.",
+    ],
+  };
+}
+
+function getSoftReduceFraction(
+  context: PaperTradingContext,
+  analysis: PositionStructureAnalysis,
+): number {
+  const base = getDefaultReduceFraction(context.settings);
+  let fraction = Math.max(0.15, Math.min(0.25, base * 0.5));
+
+  if (analysis.upperRangeChase || analysis.pnlPct >= 0.05) {
+    fraction = Math.max(fraction, 0.25);
+  }
+
+  return Math.min(0.35, fraction);
 }
 
 function getBullishAllocationMultiplier(input: {
