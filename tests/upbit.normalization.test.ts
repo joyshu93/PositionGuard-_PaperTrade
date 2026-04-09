@@ -1,5 +1,6 @@
 import {
   getCandleEndpoint,
+  getLiveTickerPrices,
   MARKET_SNAPSHOT_CANDLE_COUNTS,
   normalizeUpbitCandleSeries,
   normalizeUpbitDayCandle,
@@ -136,4 +137,44 @@ assertEqual(
   MARKET_SNAPSHOT_CANDLE_COUNTS["1d"],
   200,
   "Hourly market snapshots should fetch enough 1d candles to support the slowest indicators the strategy actually uses.",
+);
+
+const livePrices = await getLiveTickerPrices(
+  "https://mocked-upbit.local",
+  async (input) => {
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+    if (url.includes("KRW-BTC")) {
+      return new Response(
+        JSON.stringify([
+          {
+            market: "KRW-BTC",
+            trade_date_kst: "2026-03-30",
+            trade_time_kst: "11:00:00",
+            trade_date_utc: "2026-03-30",
+            trade_time_utc: "02:00:00",
+            trade_price: 155000000,
+            timestamp: 1711767600000,
+          },
+        ]),
+        { status: 200 },
+      );
+    }
+
+    return new Response("unavailable", { status: 503, statusText: "Service Unavailable" });
+  },
+);
+assertEqual(
+  livePrices.BTC,
+  155000000,
+  "Live ticker helper should expose the fresh BTC trade price when the query-time ticker request succeeds.",
+);
+assertEqual(
+  livePrices.ETH,
+  null,
+  "Live ticker helper should fall back to null asset-by-asset when one query-time ticker request fails.",
 );

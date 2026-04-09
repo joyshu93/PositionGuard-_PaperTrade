@@ -390,6 +390,35 @@ export async function getMarketSnapshotResult(
   }
 }
 
+export async function getLiveTickerPrices(
+  baseUrl: string | undefined,
+  fetchImpl?: typeof fetch,
+): Promise<Record<"BTC" | "ETH", number | null>> {
+  const client = new UpbitClient({
+    ...(baseUrl ? { baseUrl } : {}),
+    ...(fetchImpl ? { fetchImpl } : {}),
+  });
+  const [btcTicker, ethTicker] = await Promise.allSettled([
+    client.getTicker("KRW-BTC"),
+    client.getTicker("KRW-ETH"),
+  ]);
+
+  if (btcTicker.status === "rejected") {
+    const message = btcTicker.reason instanceof Error ? btcTicker.reason.message : String(btcTicker.reason);
+    console.warn(`[upbit] live BTC ticker fetch failed: ${message}`);
+  }
+
+  if (ethTicker.status === "rejected") {
+    const message = ethTicker.reason instanceof Error ? ethTicker.reason.message : String(ethTicker.reason);
+    console.warn(`[upbit] live ETH ticker fetch failed: ${message}`);
+  }
+
+  return {
+    BTC: btcTicker.status === "fulfilled" ? btcTicker.value.tradePrice : null,
+    ETH: ethTicker.status === "fulfilled" ? ethTicker.value.tradePrice : null,
+  };
+}
+
 function mapNormalizedCandle(
   candle: NormalizedCandle,
 ): import("./domain/types").MarketCandle {

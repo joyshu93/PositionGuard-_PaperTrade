@@ -1,6 +1,7 @@
 import type {
   EquitySnapshot,
   PaperAccount,
+  PaperPerformanceSnapshot,
   PaperPosition,
   PaperTradingSettings,
   PaperTrade,
@@ -282,6 +283,37 @@ export function buildEquitySnapshot(params: {
     realizedPnl: params.account.realizedPnl,
     unrealizedPnl,
     totalReturnPct,
+  };
+}
+
+export function overlayPaperPerformanceLivePrices(
+  snapshot: PaperPerformanceSnapshot,
+  livePrices: Partial<Record<SupportedAsset, number | null>>,
+): PaperPerformanceSnapshot {
+  const latestPrices: Record<SupportedAsset, number | null> = {
+    BTC: livePrices.BTC ?? snapshot.latestPrices.BTC,
+    ETH: livePrices.ETH ?? snapshot.latestPrices.ETH,
+  };
+  const totalEquity = roundMoney(
+    snapshot.account.cashBalance +
+      calculatePositionMarketValue(snapshot.positions.BTC, latestPrices.BTC) +
+      calculatePositionMarketValue(snapshot.positions.ETH, latestPrices.ETH),
+  );
+  const unrealizedPnl = roundMoney(
+    calculateUnrealizedPnl(snapshot.positions.BTC, latestPrices.BTC) +
+      calculateUnrealizedPnl(snapshot.positions.ETH, latestPrices.ETH),
+  );
+  const cumulativeReturnPct =
+    snapshot.account.initialCash > 0
+      ? Number((((totalEquity - snapshot.account.initialCash) / snapshot.account.initialCash) * 100).toFixed(4))
+      : 0;
+
+  return {
+    ...snapshot,
+    latestPrices,
+    totalEquity,
+    unrealizedPnl,
+    cumulativeReturnPct,
   };
 }
 

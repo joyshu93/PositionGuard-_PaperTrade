@@ -27,6 +27,8 @@ import {
   renderPaperSettingsMessage,
   renderPaperStatusMessage,
 } from "./paper/reporting.js";
+import { overlayPaperPerformanceLivePrices } from "./paper/math.js";
+import { getLiveTickerPrices } from "./upbit.js";
 
 const jsonHeaders = {
   "content-type": "application/json; charset=utf-8",
@@ -149,7 +151,11 @@ async function handleFetch(
               user.id,
               runtime.paperTradingSettings.values.initialPaperCashKrw,
             );
-            return renderPaperStatusMessage(snapshot, locale);
+            const livePrices = await getLiveTickerPrices(runtime.upbitBaseUrl ?? undefined);
+            return renderPaperStatusMessage(
+              overlayPaperPerformanceLivePrices(snapshot, livePrices),
+              locale,
+            );
           },
           async getPositions(telegramUserId, locale) {
             const user = await ensureTelegramUser(env.DB, {
@@ -161,7 +167,11 @@ async function handleFetch(
               user.id,
               runtime.paperTradingSettings.values.initialPaperCashKrw,
             );
-            return renderPaperPositionsMessage(snapshot, locale);
+            const livePrices = await getLiveTickerPrices(runtime.upbitBaseUrl ?? undefined);
+            return renderPaperPositionsMessage(
+              overlayPaperPerformanceLivePrices(snapshot, livePrices),
+              locale,
+            );
           },
           async getPnl(telegramUserId, locale) {
             const user = await ensureTelegramUser(env.DB, {

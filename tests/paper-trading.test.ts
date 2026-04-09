@@ -12,6 +12,7 @@ import {
   calculateBuyQuantity,
   calculateSellFill,
   calculateSellQuantity,
+  overlayPaperPerformanceLivePrices,
 } from "../src/paper/math.js";
 import {
   buildHourlySummaryMessage,
@@ -134,6 +135,25 @@ const performanceSnapshot = {
   cumulativeRealizedPnlFromTrades: 7_500,
 };
 
+const liveOverlayBaseSnapshot = {
+  ...performanceSnapshot,
+  account: afterBuy.account,
+  positions: {
+    BTC: afterBuy.position,
+    ETH: null,
+  },
+  latestPrices: {
+    BTC: 100_000,
+    ETH: null,
+  },
+  totalEquity: afterBuy.account.cashBalance + afterBuy.position.quantity * 100_000,
+  unrealizedPnl: (100_000 - afterBuy.position.averageEntryPrice) * afterBuy.position.quantity,
+  cumulativeReturnPct:
+    (((afterBuy.account.cashBalance + afterBuy.position.quantity * 100_000) - afterBuy.account.initialCash) /
+      afterBuy.account.initialCash) *
+    100,
+};
+
 assert(
   renderPaperStatusMessage(performanceSnapshot, "en").includes("All fills are internal simulated paper fills."),
   "Paper status should explicitly say fills are simulated.",
@@ -141,6 +161,26 @@ assert(
 assert(
   renderPaperPnlMessage(performanceSnapshot, "en").includes("Total closed trades: 3"),
   "/pnl should show cumulative closed-trade count.",
+);
+
+const liveMarkedSnapshot = overlayPaperPerformanceLivePrices(
+  liveOverlayBaseSnapshot,
+  {
+    BTC: 125_000,
+  },
+);
+assertEqual(
+  liveMarkedSnapshot.latestPrices.BTC,
+  125_000,
+  "Live-price overlay should replace the persisted BTC mark when a fresh query-time price is available.",
+);
+assert(
+  liveMarkedSnapshot.totalEquity > liveOverlayBaseSnapshot.totalEquity,
+  "Live-price overlay should recalculate current equity from the query-time mark price.",
+);
+assert(
+  liveMarkedSnapshot.unrealizedPnl > liveOverlayBaseSnapshot.unrealizedPnl,
+  "Live-price overlay should recalculate unrealized PnL from the query-time mark price.",
 );
 
 const hourlySummary = buildHourlySummaryMessage({

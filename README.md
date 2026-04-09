@@ -128,6 +128,13 @@ The previous manual `/setcash` and `/setposition` workflow is intentionally not 
 - it opens a compact inline menu for `/status`, `/positions`, `/pnl`, `/history`, `/decision`, `/daily`, `/settings`, and `/help`
 - it avoids dumping the main command list as one long text line
 
+`/status` and `/positions` now use query-time public Upbit ticker prices when available:
+
+- they still load persisted account and position state from D1
+- they then overlay fresh BTC/ETH public ticker prices for the current query
+- if a live ticker request fails, they fall back to the latest persisted mark price for that asset
+- this live-price overlay is for read visibility only and does not mutate persisted state by itself
+
 ## Settings
 
 Paper-trading settings are resolved through `src/paper/config.ts`.
@@ -199,6 +206,8 @@ Cumulative stats are calculated from persisted trade history as follows:
 - cumulative return = `(current equity - initial cash) / initial cash`
 
 `/history` is intentionally recent-only and is labeled that way. It is not the basis for cumulative win rate.
+
+`/pnl`, `/daily`, and hourly persisted performance snapshots still reflect persisted paper-trading state. The live query-time price overlay is currently limited to `/status` and `/positions`.
 
 `/decision` shows the latest persisted BTC and ETH decision rows with:
 
