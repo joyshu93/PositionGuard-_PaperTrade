@@ -1,6 +1,10 @@
 import { assert, assertEqual } from "./test-helpers.js";
-import type { PaperTradingContext } from "../src/domain/types.js";
-import type { PositionStructureAnalysis, TimeframeStructure } from "../src/decision/market-structure.js";
+import type { MarketSnapshot, PaperTradingContext } from "../src/domain/types.js";
+import {
+  analyzeMarketStructure,
+  type PositionStructureAnalysis,
+  type TimeframeStructure,
+} from "../src/decision/market-structure.js";
 import {
   applyPaperFill,
   buildEquitySnapshot,
@@ -17,7 +21,7 @@ import {
   renderPaperStatusMessage,
 } from "../src/paper/reporting.js";
 import { buildPaperTradeDecisionFromAnalysis } from "../src/paper/strategy.js";
-import { runUserHourlyCycle } from "../src/hourly.js";
+import { resolvePortfolioMarkPrices, runUserHourlyCycle } from "../src/hourly.js";
 
 const account = {
   id: 1,
@@ -176,6 +180,64 @@ assert(
   "/settings should distinguish exchange-referenced assumptions from internal simulation settings.",
 );
 
+const incompleteCandleAnalysis = analyzeMarketStructure(
+  createMonotonicMarketSnapshot({
+    tradePrice: 95,
+    tradeTimeUtc: "2026-04-06T10:15:00",
+    fetchedAt: "2026-04-06T10:15:00.000Z",
+    oneHourCloses: [100, 101, 102, 103, 104, 90],
+    oneHourVolumes: [100, 100, 100, 100, 100, 250],
+    oneHourFinalCloseTime: "2026-04-06T11:00:00",
+    fourHourCloses: [95, 96, 97, 98, 99, 100],
+    oneDayCloses: [90, 91, 92, 93, 94, 95],
+  }),
+);
+assertEqual(
+  incompleteCandleAnalysis.timeframes["1h"].latestClose,
+  104,
+  "Structure analysis should ignore a still-forming latest candle and use the most recent completed close for signal inputs.",
+);
+assertEqual(
+  incompleteCandleAnalysis.volumeRecovery,
+  false,
+  "An incomplete volume spike should not count as constructive recovery volume.",
+);
+
+const mutedRecoveryAnalysis = analyzeMarketStructure(
+  createMonotonicMarketSnapshot({
+    tradePrice: 103,
+    tradeTimeUtc: "2026-04-06T10:00:00",
+    fetchedAt: "2026-04-06T10:00:00.000Z",
+    oneHourCloses: [100, 100.5, 101, 101.5, 102, 102.2, 102.4, 102.6, 102.8, 103, 103.1, 103.2, 103.3, 103.4, 103.5, 103.6, 103.7, 103.8, 103.9, 104, 104.1],
+    oneHourVolumes: [100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 96],
+    fourHourCloses: [95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 104.2, 104.4, 104.6, 104.8, 105, 105.1, 105.2, 105.3, 105.4, 105.5, 105.6],
+    fourHourVolumes: [100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 99],
+    oneDayCloses: [90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110],
+  }),
+);
+assertEqual(
+  mutedRecoveryAnalysis.volumeRecovery,
+  false,
+  "Sub-baseline recovery volume should not be treated as constructive recovery anymore.",
+);
+
+const constructiveRecoveryAnalysis = analyzeMarketStructure(
+  createMonotonicMarketSnapshot({
+    tradePrice: 103,
+    tradeTimeUtc: "2026-04-06T10:00:00",
+    fetchedAt: "2026-04-06T10:00:00.000Z",
+    oneHourCloses: [100, 100.5, 101, 101.5, 102, 102.2, 102.4, 102.6, 102.8, 103, 103.1, 103.2, 103.3, 103.4, 103.5, 103.6, 103.7, 103.8, 103.9, 104, 104.2],
+    oneHourVolumes: [100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 112],
+    fourHourCloses: [95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 104.2, 104.4, 104.6, 104.8, 105, 105.1, 105.2, 105.3, 105.4, 105.5, 105.6],
+    oneDayCloses: [90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110],
+  }),
+);
+assertEqual(
+  constructiveRecoveryAnalysis.volumeRecovery,
+  true,
+  "Recovery volume should still count when the latest completed candle actually expands above baseline.",
+);
+
 const hysteresisEntryHold = buildPaperTradeDecisionFromAnalysis(
   createContext({ positionQuantity: 0 }),
   createAnalysis({
@@ -202,6 +264,7 @@ const deferredBorderlineEntry = buildPaperTradeDecisionFromAnalysis(
     macdImproving: false,
     reclaimStructure: false,
     breakoutHoldStructure: false,
+    trendAlignmentScore: 3,
   }),
 );
 assert(
@@ -229,19 +292,55 @@ const confirmedBorderlineEntry = buildPaperTradeDecisionFromAnalysis(
       referencePrice: 100_000,
       fillPrice: null,
       tradeId: null,
-      createdAt: "2026-04-06T00:00:00.000Z",
+      createdAt: "2026-04-05T23:10:00.000Z",
     },
   }),
   createAnalysis({
     regime: "PULLBACK_IN_UPTREND",
     pullbackZone: true,
     volumeRecovery: true,
+    trendAlignmentScore: 3,
   }),
 );
 assertEqual(
   confirmedBorderlineEntry.executionDisposition,
   "EXECUTED_AFTER_CONFIRMATION",
-  "A repeated borderline bullish setup should execute after one additional hourly confirmation.",
+  "A borderline bullish setup should execute only when the deferred decision came from the immediately previous hourly cycle.",
+);
+
+const staleDeferredEntry = buildPaperTradeDecisionFromAnalysis(
+  createContext({
+    positionQuantity: 0,
+    latestDecision: {
+      id: 11,
+      userId: 1,
+      asset: "BTC",
+      market: "KRW-BTC",
+      action: "ENTRY",
+      executionStatus: "SKIPPED",
+      summary: "Deferred",
+      reasons: [],
+      rationale: {
+        executionDisposition: "DEFERRED_CONFIRMATION",
+        signalQuality: { bucket: "BORDERLINE" },
+      },
+      referencePrice: 100_000,
+      fillPrice: null,
+      tradeId: null,
+      createdAt: "2026-04-05T22:10:00.000Z",
+    },
+  }),
+  createAnalysis({
+    regime: "PULLBACK_IN_UPTREND",
+    pullbackZone: true,
+    volumeRecovery: true,
+    trendAlignmentScore: 3,
+  }),
+);
+assertEqual(
+  staleDeferredEntry.executionDisposition,
+  "DEFERRED_CONFIRMATION",
+  "Older deferred decisions should not satisfy the one-more-hour confirmation rule.",
 );
 
 const strongImmediateEntry = buildPaperTradeDecisionFromAnalysis(
@@ -325,6 +424,8 @@ const strongAdd = buildPaperTradeDecisionFromAnalysis(
     breakoutHoldStructure: true,
     volumeRecovery: true,
     macdImproving: true,
+    entryPath: "RECLAIM",
+    recoveryQualityScore: 4,
   }),
 );
 const borderlineAdd = buildPaperTradeDecisionFromAnalysis(
@@ -346,13 +447,19 @@ const borderlineAdd = buildPaperTradeDecisionFromAnalysis(
       referencePrice: 100_000,
       fillPrice: null,
       tradeId: null,
-      createdAt: "2026-04-06T00:00:00.000Z",
+      createdAt: "2026-04-05T23:20:00.000Z",
     },
   }),
   createAnalysis({
     regime: "PULLBACK_IN_UPTREND",
     pullbackZone: true,
-    volumeRecovery: false,
+    volumeRecovery: true,
+    trendAlignmentScore: 3,
+    timeframes: {
+      "1h": createTimeframeStructure("1h", "LOWER"),
+      "4h": createTimeframeStructure("4h", "MIDDLE"),
+      "1d": createTimeframeStructure("1d", "MIDDLE"),
+    },
   }),
 );
 assert(
@@ -362,10 +469,82 @@ assert(
   "Bullish sizing should be more aggressive for stronger constructive structure than for confirmed borderline adds.",
 );
 
+const addBlockedByWeakening = buildPaperTradeDecisionFromAnalysis(
+  createContext({ positionQuantity: 1 }),
+  createAnalysis({
+    regime: "PULLBACK_IN_UPTREND",
+    pullbackZone: true,
+    volumeRecovery: true,
+    failedReclaim: true,
+    breakdownPressureScore: 2,
+    weakeningStage: "SOFT",
+  }),
+);
+assertEqual(
+  addBlockedByWeakening.action,
+  "HOLD",
+  "Adds should stay blocked when the existing hold is still valid but soft weakening is already present.",
+);
+
+const weakMidRangePullback = buildPaperTradeDecisionFromAnalysis(
+  createContext({ positionQuantity: 0 }),
+  createAnalysis({
+    regime: "PULLBACK_IN_UPTREND",
+    pullbackZone: true,
+    volumeRecovery: false,
+    reclaimStructure: false,
+    breakoutHoldStructure: false,
+    timeframes: {
+      "1h": createTimeframeStructure("1h", "MIDDLE"),
+      "4h": createTimeframeStructure("4h", "MIDDLE"),
+      "1d": createTimeframeStructure("1d", "MIDDLE"),
+    },
+  }),
+);
+assertEqual(
+  weakMidRangePullback.action,
+  "HOLD",
+  "Mid-range pullbacks without lower-location support or constructive recovery quality should stay on HOLD.",
+);
+
+const resolvedPrices = resolvePortfolioMarkPrices(
+  "BTC",
+  151_000_000,
+  {
+    BTC: { lastMarkPrice: 146_000_000 },
+    ETH: { lastMarkPrice: 3_100_000 },
+  },
+  {
+    BTC: {
+      ok: true,
+      snapshot: createContext().marketSnapshot,
+    },
+    ETH: {
+      ok: true,
+      snapshot: {
+        ...createContext().marketSnapshot,
+        market: "KRW-ETH",
+        asset: "ETH",
+        ticker: {
+          ...createContext().marketSnapshot.ticker,
+          market: "KRW-ETH",
+          tradePrice: 3_450_000,
+        },
+      },
+    },
+  },
+);
+assertEqual(
+  resolvedPrices.ETH,
+  3_450_000,
+  "Portfolio exposure should use the fresh hourly batch price for the other tracked asset when it is available.",
+);
+
 const softReentryPenalty = buildPaperTradeDecisionFromAnalysis(
   createContext({
     positionQuantity: 0,
     recentExitHours: 6,
+    recentExitRealizedPnl: -10_000,
   }),
   createAnalysis({
     regime: "PULLBACK_IN_UPTREND",
@@ -383,6 +562,7 @@ const strongReentryOvercomesPenalty = buildPaperTradeDecisionFromAnalysis(
   createContext({
     positionQuantity: 0,
     recentExitHours: 6,
+    recentExitRealizedPnl: -10_000,
   }),
   createAnalysis({
     regime: "BULL_TREND",
@@ -414,6 +594,13 @@ const decisionMessage = renderPaperDecisionMessage(
         rationale: {
           executionDisposition: "DEFERRED_CONFIRMATION",
           signalQuality: { bucket: "BORDERLINE" },
+          diagnostics: {
+            entryPath: "PULLBACK",
+            trendAlignmentScore: 4,
+            recoveryQualityScore: 2,
+            breakdownPressureScore: 1,
+            weakeningStage: "NONE",
+          },
         },
         referencePrice: 150_000_000,
         fillPrice: null,
@@ -432,6 +619,13 @@ const decisionMessage = renderPaperDecisionMessage(
         rationale: {
           executionDisposition: "IMMEDIATE",
           signalQuality: { bucket: "HIGH" },
+          diagnostics: {
+            entryPath: "RECLAIM",
+            trendAlignmentScore: 5,
+            recoveryQualityScore: 4,
+            breakdownPressureScore: 0,
+            weakeningStage: "NONE",
+          },
         },
         referencePrice: 4_500_000,
         fillPrice: 4_501_000,
@@ -445,8 +639,9 @@ const decisionMessage = renderPaperDecisionMessage(
 assert(
   decisionMessage.includes("BTC: Entry | Deferred") &&
     decisionMessage.includes("Signal quality: Borderline") &&
+    decisionMessage.includes("Path: Pullback") &&
     decisionMessage.includes("ETH: Add | Immediate"),
-  "/decision should show deferred versus immediate execution status and the signal quality bucket.",
+  "/decision should show execution status, signal quality, and the main entry-path diagnostics.",
 );
 
 let aggregatePersistCalls = 0;
@@ -584,6 +779,7 @@ function createContext(input?: {
   positionQuantity?: number;
   latestDecision?: PaperTradingContext["latestDecision"];
   recentExitHours?: number | null;
+  recentExitRealizedPnl?: number | null;
 }): PaperTradingContext {
   const quantity = input?.positionQuantity ?? 0;
   return {
@@ -627,6 +823,7 @@ function createContext(input?: {
       tradeId: input?.recentExitHours != null ? 5 : null,
       createdAt: input?.recentExitHours != null ? "2026-04-05T20:00:00.000Z" : null,
       hoursSinceExit: input?.recentExitHours ?? null,
+      realizedPnl: input?.recentExitRealizedPnl ?? null,
     },
     marketSnapshot: {
       market: "KRW-BTC",
@@ -684,13 +881,21 @@ function createAnalysis(overrides?: Partial<PositionStructureAnalysis>): Positio
     rsiRecovery: false,
     bearishMomentumExpansion: false,
     atrShock: false,
+    entryPath: "PULLBACK",
+    trendAlignmentScore: 5,
+    recoveryQualityScore: 2,
+    breakdownPressureScore: 0,
+    weakeningStage: "NONE",
     averageEntryPrice: 100_000,
     pnlPct: 0,
     ...overrides,
   };
 }
 
-function createTimeframeStructure(timeframe: TimeframeStructure["timeframe"]): TimeframeStructure {
+function createTimeframeStructure(
+  timeframe: TimeframeStructure["timeframe"],
+  location: TimeframeStructure["location"] = "MIDDLE",
+): TimeframeStructure {
   return {
     timeframe,
     trend: "UP",
@@ -698,7 +903,7 @@ function createTimeframeStructure(timeframe: TimeframeStructure["timeframe"]): T
     rangeLow: 95_000,
     previousRangeLow: 96_000,
     previousRangeHigh: 104_000,
-    location: "MIDDLE",
+    location,
     changePct: 0.02,
     latestClose: 100_000,
     previousClose: 99_500,
@@ -727,4 +932,79 @@ function createTimeframeStructure(timeframe: TimeframeStructure["timeframe"]): T
     rsiOverbought: false,
     rsiOversold: false,
   };
+}
+
+function createMonotonicMarketSnapshot(input: {
+  tradePrice: number;
+  tradeTimeUtc: string;
+  fetchedAt: string;
+  oneHourCloses: number[];
+  oneHourVolumes?: number[];
+  oneHourFinalCloseTime?: string;
+  fourHourCloses: number[];
+  fourHourVolumes?: number[];
+  oneDayCloses: number[];
+  oneDayVolumes?: number[];
+}): MarketSnapshot {
+  return {
+    market: "KRW-BTC",
+    asset: "BTC",
+    fetchedAt: input.fetchedAt,
+    ticker: {
+      market: "KRW-BTC",
+      tradePrice: input.tradePrice,
+      changeRate: 0,
+      tradeTimeKst: "2026-04-06T19:00:00",
+      tradeTimeUtc: input.tradeTimeUtc,
+      exchangeTimestampMs: Date.parse(`${input.tradeTimeUtc}Z`),
+      fetchedAt: input.fetchedAt,
+    },
+    timeframes: {
+      "1h": {
+        timeframe: "1h",
+        candles: createMonotonicCandles("1h", input.oneHourCloses, input.oneHourVolumes, "2026-04-06T05:00:00Z", 60, input.oneHourFinalCloseTime),
+      },
+      "4h": {
+        timeframe: "4h",
+        candles: createMonotonicCandles("4h", input.fourHourCloses, input.fourHourVolumes, "2026-03-28T00:00:00Z", 240),
+      },
+      "1d": {
+        timeframe: "1d",
+        candles: createMonotonicCandles("1d", input.oneDayCloses, input.oneDayVolumes, "2026-03-17T00:00:00Z", 1440),
+      },
+    },
+  };
+}
+
+function createMonotonicCandles(
+  timeframe: "1h" | "4h" | "1d",
+  closes: number[],
+  volumes: number[] | undefined,
+  startIso: string,
+  stepMinutes: number,
+  finalCloseTimeOverride?: string,
+) {
+  const startMs = Date.parse(startIso);
+  return closes.map((closePrice, index) => {
+    const openedAt = new Date(startMs + index * stepMinutes * 60_000);
+    const closedAt = new Date(openedAt.getTime() + stepMinutes * 60_000);
+    const previousClose = index > 0 ? closes[index - 1] ?? closePrice : closePrice;
+    const volume = volumes?.[index] ?? 100;
+
+    return {
+      market: "KRW-BTC" as const,
+      timeframe,
+      openTime: openedAt.toISOString().slice(0, 19),
+      closeTime:
+        index === closes.length - 1 && finalCloseTimeOverride
+          ? finalCloseTimeOverride
+          : closedAt.toISOString().slice(0, 19),
+      openPrice: previousClose,
+      highPrice: Math.max(previousClose, closePrice) + 1,
+      lowPrice: Math.min(previousClose, closePrice) - 1,
+      closePrice,
+      volume,
+      quoteVolume: volume * closePrice,
+    };
+  });
 }

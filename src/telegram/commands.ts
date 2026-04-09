@@ -2,7 +2,6 @@ import type { SupportedLocale } from "../domain/types.js";
 import { resolveUserLocale } from "../i18n/index.js";
 import { parseCashAmount, parseSleepModeArg, parseTelegramCallbackAction } from "./parser.js";
 import type {
-  TelegramCallbackAction,
   TelegramCommandContext,
   TelegramOutgoingAction,
   TelegramReplyMarkup,
@@ -103,7 +102,10 @@ async function routeCallback(
       ];
     default:
       return [
-        answer(context.replyToCallback.id, locale === "ko" ? "아직 지원하지 않는 버튼입니다." : "This button is not supported yet."),
+        answer(
+          context.replyToCallback.id,
+          locale === "ko" ? "아직 지원하지 않는 버튼입니다." : "This button is not supported yet.",
+        ),
       ];
   }
 }
@@ -228,8 +230,8 @@ async function handleSetStartCash(
     send(
       context.chatId,
       locale === "ko"
-        ? `다음 /resetpaper confirm부터 시작금액 ${formatKrw(nextCash)} 이 적용됩니다. 현재 계좌는 즉시 바뀌지 않습니다.`
-        : `Starting cash ${formatKrw(nextCash)} will be applied on the next /resetpaper confirm. The current account is not changed immediately.`,
+        ? `다음 /resetpaper confirm부터 시작금액 ${formatKrw(nextCash, locale)} 이 적용됩니다. 현재 계좌는 즉시 바뀌지 않습니다.`
+        : `Starting cash ${formatKrw(nextCash, locale)} will be applied on the next /resetpaper confirm. The current account is not changed immediately.`,
     ),
   ];
 }
@@ -247,8 +249,8 @@ async function handleResetPaper(
           ? [
               "페이퍼 계좌 초기화는 확인이 필요합니다.",
               "실행하려면: /resetpaper confirm",
-              "다른 시작금액을 원하면 먼저 /setstartcash <금액> 을 입력해 주세요.",
-              "초기화하면 거래내역, 포지션, 손익 상태, equity snapshot, decision 기록이 모두 새 출발 상태로 리셋됩니다.",
+              "다른 시작금액이 필요하면 먼저 /setstartcash <금액> 을 입력해 주세요.",
+              "초기화하면 거래 이력, 포지션, 손익 상태, 자산 스냅샷, 결정 기록이 모두 새 출발 상태로 리셋됩니다.",
             ].join("\n")
           : [
               "Paper account reset requires confirmation.",
@@ -270,13 +272,13 @@ async function handleResetPaper(
       context.chatId,
       locale === "ko"
         ? [
-            "페이퍼 계좌가 초기화되었습니다.",
-            `새 시작금액: ${formatKrw(result.startingCash)}`,
-            "포지션, 거래내역, 손익 상태, equity snapshot, decision 기록이 새 출발 상태로 리셋되었습니다.",
+            "페이퍼 계좌 초기화가 완료되었습니다.",
+            `새 시작금액: ${formatKrw(result.startingCash, locale)}`,
+            "포지션, 거래 이력, 손익 상태, 자산 스냅샷, 결정 기록이 모두 새 출발 상태로 리셋되었습니다.",
           ].join("\n")
         : [
             "Paper account reset completed.",
-            `New starting cash: ${formatKrw(result.startingCash)}`,
+            `New starting cash: ${formatKrw(result.startingCash, locale)}`,
             "Positions, trade history, PnL state, equity snapshots, and decision records were reset for a fresh start.",
           ].join("\n"),
     ),
@@ -407,8 +409,9 @@ function unavailable(locale: SupportedLocale): string {
     : "Paper-trading status is not available yet.";
 }
 
-function formatKrw(value: number): string {
-  return `${Math.round(value).toLocaleString("en-US")} KRW`;
+function formatKrw(value: number, locale: SupportedLocale): string {
+  const formatted = Math.round(value).toLocaleString(locale === "ko" ? "ko-KR" : "en-US");
+  return `${formatted} KRW`;
 }
 
 function button(text: string, callbackData: string) {

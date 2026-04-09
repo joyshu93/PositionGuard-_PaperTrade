@@ -1,5 +1,6 @@
 import {
   getCandleEndpoint,
+  MARKET_SNAPSHOT_CANDLE_COUNTS,
   normalizeUpbitCandleSeries,
   normalizeUpbitDayCandle,
   normalizeUpbitMinuteCandle,
@@ -120,4 +121,19 @@ assertEqual(
   getCandleEndpoint("4h"),
   "/v1/candles/minutes/240",
   "Endpoint resolution should use the public Upbit 240-minute path for 4h candles.",
+);
+assertEqual(
+  MARKET_SNAPSHOT_CANDLE_COUNTS["1h"],
+  200,
+  "Hourly market snapshots should fetch enough 1h candles to support the slowest indicators the strategy actually uses.",
+);
+assertEqual(
+  MARKET_SNAPSHOT_CANDLE_COUNTS["4h"],
+  200,
+  "Hourly market snapshots should fetch enough 4h candles to support the slowest indicators the strategy actually uses.",
+);
+assertEqual(
+  MARKET_SNAPSHOT_CANDLE_COUNTS["1d"],
+  200,
+  "Hourly market snapshots should fetch enough 1d candles to support the slowest indicators the strategy actually uses.",
 );

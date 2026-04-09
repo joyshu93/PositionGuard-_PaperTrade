@@ -1,5 +1,6 @@
 import type {
   DecisionExecutionDisposition,
+  EntryPath,
   PaperDailySummary,
   PaperDecisionSnapshot,
   PaperPerformanceSnapshot,
@@ -11,6 +12,7 @@ import type {
   StrategyDecisionRecord,
   SupportedAsset,
   SupportedLocale,
+  WeakeningStage,
 } from "../domain/types.js";
 import { formatCompactTimestampForLocale, formatNumberForLocale } from "../i18n/index.js";
 
@@ -133,9 +135,9 @@ export function renderPaperSettingsMessage(
       "거래소 기준 참고값",
       `수수료율: ${formatDecimal(locale, settings.values.feeRate)} (${fieldSourceLabel(locale, settings, "feeRate")})`,
       `최소 거래 금액: ${formatKrw(locale, settings.values.minimumTradeValueKrw)} (${fieldSourceLabel(locale, settings, "minimumTradeValueKrw")})`,
-      "참고: Upbit KRW 현물 기준을 참고한 값이며, 거래소 정책을 실시간 동기화하지는 않습니다.",
+      "참고: Upbit KRW 현물 기준을 참고한 값이며 거래소와 실시간 동기화되지는 않습니다.",
       "",
-      "내부 시뮬레이션/전략 설정",
+      "내부 시뮬레이션 및 전략 설정",
       `초기 페이퍼 현금: ${formatKrw(locale, settings.values.initialPaperCashKrw)} (${fieldSourceLabel(locale, settings, "initialPaperCashKrw")})`,
       `슬리피지율: ${formatDecimal(locale, settings.values.slippageRate)} (${fieldSourceLabel(locale, settings, "slippageRate")})`,
       `진입 배분: ${formatPercent(locale, settings.values.entryAllocation * 100)} (${fieldSourceLabel(locale, settings, "entryAllocation")})`,
@@ -143,7 +145,7 @@ export function renderPaperSettingsMessage(
       `축소 비중: ${formatPercent(locale, settings.values.reduceFraction * 100)} (${fieldSourceLabel(locale, settings, "reduceFraction")})`,
       `자산별 최대 비중: ${formatPercent(locale, settings.values.perAssetMaxAllocation * 100)} (${fieldSourceLabel(locale, settings, "perAssetMaxAllocation")})`,
       `총 최대 익스포저: ${formatPercent(locale, settings.values.totalPortfolioMaxExposure * 100)} (${fieldSourceLabel(locale, settings, "totalPortfolioMaxExposure")})`,
-      "참고: 슬리피지와 배분/익스포저 값은 거래소 정책이 아니라 내부 페이퍼트레이딩 가정입니다.",
+      "참고: 슬리피지, 배분, 익스포저 값은 거래소 정책이 아니라 내부 페이퍼트레이딩 가정입니다.",
       "",
       `출처 요약: ${sourceSummary}`,
     ].join("\n");
@@ -194,9 +196,7 @@ export function renderPaperDailyMessage(
     `${locale === "ko" ? "현재 총자산" : "Current total equity"}: ${formatKrw(locale, summary.currentTotalEquity)}`,
     `${locale === "ko" ? "BTC 액션 수" : "BTC action counts"}: ${renderActionCounts(summary.actionCounts.BTC, locale)}`,
     `${locale === "ko" ? "ETH 액션 수" : "ETH action counts"}: ${renderActionCounts(summary.actionCounts.ETH, locale)}`,
-    locale === "ko"
-      ? "기준 시간대: Asia/Seoul (KST)"
-      : "Timezone basis: Asia/Seoul (KST)",
+    locale === "ko" ? "기준 시간대: Asia/Seoul (KST)" : "Timezone basis: Asia/Seoul (KST)",
   ].join("\n");
 }
 
@@ -259,7 +259,11 @@ function renderCompactPositionLine(
   }
 
   const unrealized = price === null ? 0 : (price - position.averageEntryPrice) * position.quantity;
-  return `${asset}: ${formatNumberForLocale(locale, position.quantity, 8)} | avg ${formatKrw(locale, position.averageEntryPrice)} | uPnL ${formatSignedKrw(locale, unrealized)}`;
+  return [
+    `${asset}: ${formatNumberForLocale(locale, position.quantity, 8)}`,
+    `${label(locale, "avg_short")} ${formatKrw(locale, position.averageEntryPrice)}`,
+    `${label(locale, "unrealized_short")} ${formatSignedKrw(locale, unrealized)}`,
+  ].join(" | ");
 }
 
 function renderDetailedPositionLine(
@@ -296,15 +300,25 @@ function renderDecisionLine(
 
   const meta = readDecisionMeta(decision.rationale);
   const reasons = decision.reasons.slice(0, 2).join(" / ");
+  const detailLine = [
+    `${locale === "ko" ? "경로" : "Path"}: ${getEntryPathLabel(locale, meta.entryPath)}`,
+    `${locale === "ko" ? "추세 정렬" : "Trend"} ${formatScore(meta.trendAlignmentScore, 5)}`,
+    `${locale === "ko" ? "회복 품질" : "Recovery"} ${formatScore(meta.recoveryQualityScore)}`,
+    `${locale === "ko" ? "하락 압력" : "Pressure"} ${getPressureLabel(locale, meta.breakdownPressureScore)}`,
+  ].join(" | ");
 
   return [
     `${asset}: ${getLocalizedPaperActionLabel(locale, decision.action)} | ${getDispositionLabel(locale, meta.executionDisposition, decision.executionStatus)}`,
     `${locale === "ko" ? "신호 강도" : "Signal quality"}: ${getQualityBucketLabel(locale, meta.signalQualityBucket)}`,
+    detailLine,
+    meta.weakeningStage !== "NONE"
+      ? `${locale === "ko" ? "약화 단계" : "Weakening"}: ${getWeakeningStageLabel(locale, meta.weakeningStage)}`
+      : null,
     decision.summary,
     `${locale === "ko" ? "사유" : "Reasons"}: ${reasons || na(locale)}`,
     `${locale === "ko" ? "기준가" : "Reference"}: ${decision.referencePrice > 0 ? formatKrw(locale, decision.referencePrice) : na(locale)}`,
     `${locale === "ko" ? "시각" : "At"}: ${formatCompactTimestampForLocale(locale, decision.createdAt)}`,
-  ].join("\n");
+  ].filter((value): value is string => Boolean(value)).join("\n");
 }
 
 function renderActionCounts(
@@ -322,11 +336,21 @@ function renderActionCounts(
 function readDecisionMeta(rationale: unknown): {
   executionDisposition: DecisionExecutionDisposition;
   signalQualityBucket: SignalQualityBucket | null;
+  entryPath: EntryPath;
+  trendAlignmentScore: number | null;
+  recoveryQualityScore: number | null;
+  breakdownPressureScore: number | null;
+  weakeningStage: WeakeningStage;
 } {
   if (!rationale || typeof rationale !== "object") {
     return {
       executionDisposition: "SKIPPED",
       signalQualityBucket: null,
+      entryPath: "NONE",
+      trendAlignmentScore: null,
+      recoveryQualityScore: null,
+      breakdownPressureScore: null,
+      weakeningStage: "NONE",
     };
   }
 
@@ -334,6 +358,10 @@ function readDecisionMeta(rationale: unknown): {
   const signalQuality =
     value.signalQuality && typeof value.signalQuality === "object"
       ? (value.signalQuality as Record<string, unknown>)
+      : null;
+  const diagnostics =
+    value.diagnostics && typeof value.diagnostics === "object"
+      ? (value.diagnostics as Record<string, unknown>)
       : null;
 
   return {
@@ -345,6 +373,26 @@ function readDecisionMeta(rationale: unknown): {
       signalQuality && typeof signalQuality.bucket === "string"
         ? (signalQuality.bucket as SignalQualityBucket)
         : null,
+    entryPath:
+      diagnostics && typeof diagnostics.entryPath === "string"
+        ? (diagnostics.entryPath as EntryPath)
+        : "NONE",
+    trendAlignmentScore:
+      diagnostics && typeof diagnostics.trendAlignmentScore === "number"
+        ? diagnostics.trendAlignmentScore
+        : null,
+    recoveryQualityScore:
+      diagnostics && typeof diagnostics.recoveryQualityScore === "number"
+        ? diagnostics.recoveryQualityScore
+        : null,
+    breakdownPressureScore:
+      diagnostics && typeof diagnostics.breakdownPressureScore === "number"
+        ? diagnostics.breakdownPressureScore
+        : null,
+    weakeningStage:
+      diagnostics && typeof diagnostics.weakeningStage === "string"
+        ? (diagnostics.weakeningStage as WeakeningStage)
+        : "NONE",
   };
 }
 
@@ -388,6 +436,56 @@ function getQualityBucketLabel(
   };
 
   return (locale === "ko" ? ko : en)[bucket];
+}
+
+function getEntryPathLabel(locale: SupportedLocale, entryPath: EntryPath): string {
+  const ko: Record<EntryPath, string> = {
+    PULLBACK: "눌림",
+    RECLAIM: "리클레임",
+    BREAKOUT_HOLD: "돌파 후 유지",
+    NONE: "없음",
+  };
+  const en: Record<EntryPath, string> = {
+    PULLBACK: "Pullback",
+    RECLAIM: "Reclaim",
+    BREAKOUT_HOLD: "Breakout-hold",
+    NONE: "None",
+  };
+
+  return (locale === "ko" ? ko : en)[entryPath];
+}
+
+function getPressureLabel(locale: SupportedLocale, score: number | null): string {
+  if (score === null) {
+    return na(locale);
+  }
+
+  if (locale === "ko") {
+    if (score >= 4) return `높음(${score})`;
+    if (score >= 2) return `보통(${score})`;
+    return `낮음(${score})`;
+  }
+
+  if (score >= 4) return `High (${score})`;
+  if (score >= 2) return `Medium (${score})`;
+  return `Low (${score})`;
+}
+
+function getWeakeningStageLabel(locale: SupportedLocale, stage: WeakeningStage): string {
+  const ko: Record<WeakeningStage, string> = {
+    NONE: "없음",
+    SOFT: "초기 약화",
+    CLEAR: "명확한 약화",
+    FAILURE: "실패",
+  };
+  const en: Record<WeakeningStage, string> = {
+    NONE: "None",
+    SOFT: "Soft weakening",
+    CLEAR: "Clear weakening",
+    FAILURE: "Failure",
+  };
+
+  return (locale === "ko" ? ko : en)[stage];
 }
 
 function label(
@@ -496,4 +594,8 @@ function formatPercent(locale: SupportedLocale, value: number): string {
 
 function formatDecimal(locale: SupportedLocale, value: number): string {
   return formatNumberForLocale(locale, value, 4);
+}
+
+function formatScore(score: number | null, max = 6): string {
+  return score === null ? "-" : `${score}/${max}`;
 }

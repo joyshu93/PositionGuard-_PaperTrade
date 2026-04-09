@@ -234,6 +234,8 @@ export type PaperTradeAction = "HOLD" | "ENTRY" | "ADD" | "REDUCE" | "EXIT";
 export type PaperTradeSide = "BUY" | "SELL";
 export type StrategyDecisionExecutionStatus = "EXECUTED" | "SKIPPED";
 export type SignalQualityBucket = "HIGH" | "MEDIUM" | "BORDERLINE" | "LOW";
+export type EntryPath = "PULLBACK" | "RECLAIM" | "BREAKOUT_HOLD" | "NONE";
+export type WeakeningStage = "NONE" | "SOFT" | "CLEAR" | "FAILURE";
 export type DecisionExecutionDisposition =
   | "IMMEDIATE"
   | "DEFERRED_CONFIRMATION"
@@ -331,6 +333,7 @@ export interface PaperTradingContext {
     tradeId: number | null;
     createdAt: string | null;
     hoursSinceExit: number | null;
+    realizedPnl: number | null;
   };
   marketSnapshot: MarketSnapshot;
   generatedAt: string;
@@ -370,6 +373,11 @@ export interface PaperTradingDecision {
     currentPrice: number;
     cashBalance: number;
     positionQuantity: number;
+    entryPath: EntryPath;
+    trendAlignmentScore: number;
+    recoveryQualityScore: number;
+    breakdownPressureScore: number;
+    weakeningStage: WeakeningStage;
     bullishEvidenceCount?: number;
     weaknessEvidenceCount?: number;
   };

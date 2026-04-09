@@ -113,6 +113,11 @@ export interface CandleQueryOptions {
 
 const DEFAULT_BASE_URL = "https://api.upbit.com";
 const MAX_CANDLE_COUNT = 200;
+export const MARKET_SNAPSHOT_CANDLE_COUNTS: Record<SupportedTimeframe, number> = {
+  "1h": MAX_CANDLE_COUNT,
+  "4h": MAX_CANDLE_COUNT,
+  "1d": MAX_CANDLE_COUNT,
+};
 
 const timeframeConfig: Record<SupportedTimeframe, { source: CandleSource; endpointUnit: number; sourceUnitMinutes: number }> = {
   "1h": { source: "minutes", endpointUnit: 60, sourceUnitMinutes: 60 },
@@ -320,9 +325,9 @@ export async function getMarketSnapshotResult(
   try {
     const [ticker, hourly, fourHour, daily] = await Promise.all([
       client.getTicker(market),
-      client.getCandleSeries(market, "1h", { count: 24 }),
-      client.getCandleSeries(market, "4h", { count: 24 }),
-      client.getCandleSeries(market, "1d", { count: 30 }),
+      client.getCandleSeries(market, "1h", { count: MARKET_SNAPSHOT_CANDLE_COUNTS["1h"] }),
+      client.getCandleSeries(market, "4h", { count: MARKET_SNAPSHOT_CANDLE_COUNTS["4h"] }),
+      client.getCandleSeries(market, "1d", { count: MARKET_SNAPSHOT_CANDLE_COUNTS["1d"] }),
     ]);
 
     if (

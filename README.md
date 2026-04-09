@@ -95,9 +95,12 @@ Market-data freshness semantics:
 
 - each hourly run fetches fresh public Upbit data for BTC and ETH at run time
 - the hourly run fetches BTC and ETH as one batch before per-asset decision processing
+- each fetched snapshot now pulls `200` candles for `1h`, `4h`, and `1d` so the EMA/MACD-based structure logic is operating on enough history to be meaningful
+- structure analysis now uses the latest completed candle for timeframe logic while still using the current ticker price for hourly execution and reporting
 - ticker and candle data are not intentionally reused from a previous hourly run
 - ticker metadata now preserves exchange trade time plus fetch time
 - candle metadata now preserves both candle open time and derived candle close time
+- portfolio exposure checks now use the same fresh BTC/ETH batch prices when that hourly batch is available, instead of mixing one fresh mark with one stale persisted mark
 
 ## Telegram Commands
 
@@ -201,6 +204,10 @@ Cumulative stats are calculated from persisted trade history as follows:
 
 - localized action label
 - whether the action was immediate, deferred for confirmation, or executed after confirmation
+- entry path: `PULLBACK`, `RECLAIM`, or `BREAKOUT_HOLD`
+- trend alignment score
+- recovery quality score
+- breakdown pressure summary
 - summary
 - top reasons
 - signal quality bucket
@@ -230,11 +237,16 @@ This version improves decision quality without adding artificial trade bans such
 The main refinements are:
 
 - hysteresis: it is intentionally harder to switch from flat/HOLD into `ENTRY` or `ADD` than it is to remain on `HOLD`
-- confirmation for borderline bullish setups: weaker but still valid `ENTRY` and `ADD` setups are deferred until one more hourly confirmation appears
+- confirmation for borderline bullish setups: weaker but still valid `ENTRY` and `ADD` setups are deferred until the immediately previous hourly cycle showed the same deferred setup again
 - immediate invalidation exits: invalidation-based `EXIT` remains immediate and is never delayed by confirmation logic
 - graduated sizing: stronger constructive structure uses more of the staged allocation, while borderline confirmed structure uses less
 - soft re-entry caution: a recent exit slightly raises the threshold for a fresh `ENTRY`, but strong reclaim/recovery structure can still override it
 - exposure-based guardrails: additional bullish sizing is capped by per-asset and total-portfolio exposure limits
+- mid-range pullbacks now need better recovery quality before they count as constructive bullish candidates
+- recovery volume is now interpreted more conservatively so muted or still-forming spikes are less likely to lift a setup into action
+- entry paths are now explicit so a bullish setup is inspectable as a pullback, reclaim, or breakout-hold path
+- add logic is stricter than entry logic: an existing position must still be healthy and aligned before staged adds are allowed
+- decision diagnostics now expose trend alignment, recovery quality, and breakdown pressure so operator review is less guessy
 
 These are decision-quality refinements, not mechanical trade-frequency bans.
 

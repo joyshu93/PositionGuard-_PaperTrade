@@ -44,6 +44,7 @@ const SUPPORTED_MARKETS_BY_ASSET: Record<SupportedAsset, SupportedMarket> = {
   BTC: "KRW-BTC",
   ETH: "KRW-ETH",
 };
+export type HourlyMarketSnapshotBatch = Record<SupportedAsset, MarketSnapshotResult>;
 
 export interface UserHourlyAssetResult {
   asset: SupportedAsset;
@@ -114,6 +115,7 @@ export async function runUserHourlyCycle(params: {
       market,
       marketSnapshotResults[asset],
       paperTradingSettings,
+      marketSnapshotResults,
     );
     assetResults.push({ asset, execution });
   }
@@ -158,6 +160,7 @@ export async function processPaperTradingCycle(
   market: SupportedMarket,
   marketResultOrBaseUrl: MarketSnapshotResult | string | null = null,
   paperTradingSettings: PaperTradingSettings = DEFAULT_PAPER_TRADING_SETTINGS,
+  marketBatch: Partial<HourlyMarketSnapshotBatch> | null = null,
 ): Promise<PaperExecutionResult> {
   const marketResult =
     typeof marketResultOrBaseUrl === "string" || marketResultOrBaseUrl === null
@@ -212,14 +215,16 @@ export async function processPaperTradingCycle(
     getLatestStrategyDecisionByUserAsset(db, userState.user.id, asset),
     getLatestExitTradeByUserAsset(db, userState.user.id, asset),
   ]);
-  const currentPrices = {
-    BTC: asset === "BTC" ? marketResult.snapshot.ticker.tradePrice : allPositions.BTC?.lastMarkPrice ?? null,
-    ETH: asset === "ETH" ? marketResult.snapshot.ticker.tradePrice : allPositions.ETH?.lastMarkPrice ?? null,
-  };
+  const currentPrices = resolvePortfolioMarkPrices(
+    asset,
+    marketResult.snapshot.ticker.tradePrice,
+    allPositions,
+    marketBatch,
+  );
   const totalExposureValue =
     calculatePositionMarketValue(allPositions.BTC, currentPrices.BTC) +
     calculatePositionMarketValue(allPositions.ETH, currentPrices.ETH);
-  const assetMarketValue = calculatePositionMarketValue(position, marketResult.snapshot.ticker.tradePrice);
+  const assetMarketValue = calculatePositionMarketValue(position, currentPrices[asset]);
   const nowIso = new Date().toISOString();
   const context = {
     user: {
@@ -253,6 +258,7 @@ export async function processPaperTradingCycle(
       hoursSinceExit: latestExitTrade
         ? Math.max(0, (new Date(nowIso).getTime() - new Date(latestExitTrade.createdAt).getTime()) / 3_600_000)
         : null,
+      realizedPnl: latestExitTrade?.realizedPnl ?? null,
     },
     marketSnapshot: marketResult.snapshot,
     generatedAt: nowIso,
@@ -505,7 +511,7 @@ export async function bootstrapPaperUser(
 
 async function fetchHourlyMarketSnapshots(
   upbitBaseUrl: string | null,
-): Promise<Record<SupportedAsset, MarketSnapshotResult>> {
+): Promise<HourlyMarketSnapshotBatch> {
   const entries = await Promise.all(
     SUPPORTED_ASSETS.map(async (asset) => {
       const market = getMarketForAsset(asset);
@@ -514,5 +520,22 @@ async function fetchHourlyMarketSnapshots(
     }),
   );
 
-  return Object.fromEntries(entries) as Record<SupportedAsset, MarketSnapshotResult>;
+  return Object.fromEntries(entries) as HourlyMarketSnapshotBatch;
+}
+
+export function resolvePortfolioMarkPrices(
+  asset: SupportedAsset,
+  currentAssetPrice: number,
+  positions: Record<SupportedAsset, { lastMarkPrice: number | null } | null>,
+  marketBatch: Partial<HourlyMarketSnapshotBatch> | null,
+): Record<SupportedAsset, number | null> {
+  const batchPrices: Record<SupportedAsset, number | null> = {
+    BTC: marketBatch?.BTC?.ok ? marketBatch.BTC.snapshot.ticker.tradePrice : null,
+    ETH: marketBatch?.ETH?.ok ? marketBatch.ETH.snapshot.ticker.tradePrice : null,
+  };
+
+  return {
+    BTC: batchPrices.BTC ?? (asset === "BTC" ? currentAssetPrice : positions.BTC?.lastMarkPrice ?? null),
+    ETH: batchPrices.ETH ?? (asset === "ETH" ? currentAssetPrice : positions.ETH?.lastMarkPrice ?? null),
+  };
 }

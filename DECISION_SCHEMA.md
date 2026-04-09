@@ -39,11 +39,13 @@ At this stage the repository must not implement:
 1. Load persisted paper account and paper position state.
 2. Fetch fresh public market snapshots for BTC and ETH at the start of the hourly run.
 3. Normalize ticker and `1h` / `4h` / `1d` candles.
+   - the current implementation fetches `200` candles per timeframe so the slowest EMA/MACD-style structure inputs are supported by actual lookback depth
+   - structure analysis uses completed candles for timeframe logic, while the current ticker still supplies the live reference price for the hourly run
 4. Build a typed paper-trading context.
 5. Analyze market structure.
 6. Apply deterministic action rules.
 7. Apply hysteresis so that switching into bullish action requires more evidence than simply remaining on `HOLD`.
-8. For borderline `ENTRY` and `ADD` setups, defer once and require one additional hourly confirmation.
+8. For borderline `ENTRY` and `ADD` setups, defer once and require the same deferred setup to have appeared in the immediately previous hourly cycle before execution.
 9. If action is not deferred or `HOLD`, calculate a simulated fill using explicit fee, slippage, sizing, and exposure guardrails.
 10. Persist updated paper account, position, trade, equity snapshot, and strategy decision state.
 11. Send Telegram execution summary when a simulated fill occurs.
@@ -91,14 +93,22 @@ The current rule set uses inspectable structure inputs only:
 - support and resistance context
 - invalidation state
 - pullback or reclaim availability
+- explicit entry path classification: `PULLBACK`, `RECLAIM`, `BREAKOUT_HOLD`, or `NONE`
+- constructive pullback quality rather than any weak mid-range pause
 - upper-range chase filter
 - bearish momentum expansion
+- conservative recovery-volume interpretation
+- trend alignment score
+- recovery quality score
+- breakdown pressure score
+- weakening stage classification
 - current cash balance
 - current paper position quantity
 - latest persisted decision for same-asset confirmation context
+- previous-hour alignment of that deferred decision when confirmation is required
 - recent same-asset exit as a soft re-entry caution input
 - current per-asset and portfolio exposure state
-- fresh hourly-run market snapshot batch for BTC and ETH
+- fresh hourly-run market snapshot batch for BTC and ETH, including both fresh prices for portfolio exposure calculations
 
 ## Decision Output Shape
 
@@ -117,6 +127,7 @@ Decision output may also include:
 - signal-quality bucket
 - execution disposition such as `IMMEDIATE`, `DEFERRED_CONFIRMATION`, or `EXECUTED_AFTER_CONFIRMATION`
 - explicit exposure guardrail state
+- decision diagnostics such as entry path, trend alignment, recovery quality, breakdown pressure, and weakening stage
 
 Allowed action values:
 
@@ -137,6 +148,7 @@ Execution remains internal only.
 - fee, slippage, sizing, and minimum trade assumptions must stay explicit in the paper-trading configuration layer
 - exposure guardrails must stay explicit via per-asset max allocation and total portfolio max exposure
 - borderline bullish confirmation is allowed, but invalidation-based exits must never be delayed
+- `ADD` must remain stricter than `ENTRY`; an existing hold has to stay healthy and aligned before staged adds are allowed
 - cash must never go negative
 - quantity must never go negative
 
@@ -158,6 +170,7 @@ User-facing reporting must be explicit that execution is simulated.
 - `/pnl` shows realized pnl, current equity, cumulative return, and win rate when available
 - `/history` shows recent simulated trades
 - `/decision` shows the latest persisted BTC and ETH decision summaries, including whether the action was immediate, deferred for confirmation, or executed after confirmation
+- `/decision` should also expose the inspectable path and quality context behind the decision: entry path, trend alignment, recovery quality, and breakdown pressure
 - `/daily` shows KST-day paper-trading activity
 - `/settings` shows active global paper-trading settings
 - execution reports must say paper fill or simulated fill and must never imply broker connectivity
@@ -170,3 +183,4 @@ User-facing reporting must be explicit that execution is simulated.
 - keep BTC/ETH-only scope explicit
 - keep survival-first and invalidation-first framing visible in naming and reasons
 - improve decision quality through hysteresis, confirmation, soft re-entry caution, and exposure guardrails rather than artificial frequency locks
+- keep entry/add/reduce differences explicit enough that an operator can inspect why an add was blocked even when an entry would still be allowed
