@@ -97,7 +97,8 @@ The current rule set uses inspectable structure inputs only:
 - constructive pullback quality rather than any weak mid-range pause
 - upper-range chase filter
 - bearish momentum expansion
-- conservative recovery-volume interpretation
+- conservative but slightly softened recovery-volume interpretation, so slightly above-baseline completed recovery volume can support valid structure without becoming a hard blocker
+- slightly less cash-conservative staged entry sizing than the earliest paper-trading slice, while still keeping explicit exposure caps
 - trend alignment score
 - recovery quality score
 - breakdown pressure score
@@ -148,6 +149,7 @@ Execution remains internal only.
 - fee and slippage assumptions must stay explicit in code constants
 - fee, slippage, sizing, and minimum trade assumptions must stay explicit in the paper-trading configuration layer
 - exposure guardrails must stay explicit via per-asset max allocation and total portfolio max exposure
+- the current safe-first default sizing is `30%` staged entry allocation and `18%` staged add allocation before path- and quality-based multipliers are applied
 - borderline bullish confirmation is allowed, but invalidation-based exits must never be delayed
 - `ADD` must remain stricter than `ENTRY`; an existing hold has to stay healthy and aligned before staged adds are allowed
 - reclaim continuation may clear faster than a raw pullback when recovery quality is already strong
@@ -174,7 +176,8 @@ User-facing reporting must be explicit that execution is simulated.
 - `/pnl` shows realized pnl, current equity, cumulative return, and win rate when available
 - `/history` shows recent simulated trades
 - `/decision` shows the latest persisted BTC and ETH decision summaries, including whether the action was immediate, deferred for confirmation, or executed after confirmation
-- `/decision` should also expose the inspectable path and quality context behind the decision: entry path, trend alignment, recovery quality, and breakdown pressure
+- `/decision` should stay concise and operator-facing: action, execution state, explicit path when relevant, a short explanation, top reasons, reference price, and decision time
+- signal-quality buckets and other internal scoring details may remain in persisted rationale, but they should not dominate the default user-facing decision surface
 - `/daily` shows KST-day paper-trading activity
 - `/settings` shows active global paper-trading settings
 - execution reports must say paper fill or simulated fill and must never imply broker connectivity

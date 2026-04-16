@@ -54,8 +54,8 @@ export function renderPaperStatusMessage(
     renderCompactPositionLine("ETH", snapshot, locale),
     queriedAt ? getQueryTimeLine(locale, queriedAt) : null,
     locale === "ko"
-      ? "현재가와 미실현 손익은 조회 시점의 Upbit 공개 티커 가격을 우선 사용합니다."
-      : "Current prices and unrealized values prefer query-time public Upbit ticker prices.",
+      ? "현재가와 미실현 손익은 조회 시점 Upbit 공개 티커를 우선 사용합니다."
+      : "Current prices and unrealized values prefer query-time public Upbit tickers.",
     locale === "ko"
       ? "모든 체결은 내부 시뮬레이션 기준의 페이퍼 체결입니다."
       : "All fills are internal simulated paper fills.",
@@ -73,8 +73,8 @@ export function renderPaperPositionsMessage(
     renderDetailedPositionLine("ETH", snapshot, locale),
     queriedAt ? getQueryTimeLine(locale, queriedAt) : null,
     locale === "ko"
-      ? "현재가는 조회 시점의 Upbit 공개 티커 가격을 우선 사용하고, 실패 시 최신 저장 mark로 대체합니다."
-      : "Current marks prefer query-time public Upbit ticker prices and fall back to the latest persisted marks if unavailable.",
+      ? "현재가는 조회 시점 Upbit 공개 티커 기준이며, 실패 시 최근 저장 mark로 대체합니다."
+      : "Current marks use query-time public Upbit tickers and fall back to the latest persisted marks if unavailable.",
     locale === "ko"
       ? "BTC/ETH 현물 페이퍼 포지션만 표시합니다."
       : "Showing BTC/ETH spot paper positions only.",
@@ -193,8 +193,8 @@ export function renderPaperDecisionMessage(
 ): string {
   return [
     locale === "ko" ? "최근 결정" : "Latest decisions",
-    renderDecisionLine("BTC", snapshot.latestByAsset.BTC, locale),
-    renderDecisionLine("ETH", snapshot.latestByAsset.ETH, locale),
+    renderDecisionLineCompact("BTC", snapshot.latestByAsset.BTC, locale),
+    renderDecisionLineCompact("ETH", snapshot.latestByAsset.ETH, locale),
   ].join("\n");
 }
 
@@ -240,23 +240,56 @@ export function buildExecutionSummary(params: {
 
 export function buildHourlySummaryMessage(params: {
   btcAction: PaperTradeAction;
+  btcDisposition: DecisionExecutionDisposition;
   ethAction: PaperTradeAction;
+  ethDisposition: DecisionExecutionDisposition;
   snapshot: PaperPerformanceSnapshot;
   locale: SupportedLocale;
 }): string {
   const { locale, snapshot } = params;
   return [
     locale === "ko" ? "시간별 요약" : "Hourly summary",
-    `BTC: ${getLocalizedPaperActionLabel(locale, params.btcAction)} | ETH: ${getLocalizedPaperActionLabel(locale, params.ethAction)}`,
+    `BTC: ${getSummaryActionLabel(locale, params.btcAction, params.btcDisposition)} | ETH: ${getSummaryActionLabel(locale, params.ethAction, params.ethDisposition)}`,
     `${label(locale, "cash")}: ${formatKrw(locale, snapshot.account.cashBalance)}`,
     `${label(locale, "equity")}: ${formatKrw(locale, snapshot.totalEquity)}`,
     `${label(locale, "realized")}: ${formatSignedKrw(locale, snapshot.account.realizedPnl)}`,
     `${label(locale, "unrealized")}: ${formatSignedKrw(locale, snapshot.unrealizedPnl)}`,
     `${label(locale, "return")}: ${formatPercent(locale, snapshot.cumulativeReturnPct)}`,
     locale === "ko"
-      ? "모든 수치는 내부 시뮬레이션 페이퍼 체결 기준입니다."
-      : "All values reflect internal simulated paper fills.",
+      ? "모든 수치는 내부 시뮬레이션 기준입니다."
+      : "All values reflect internal simulation.",
   ].join("\n");
+}
+
+function getSummaryActionLabel(
+  locale: SupportedLocale,
+  action: PaperTradeAction,
+  disposition: DecisionExecutionDisposition,
+): string {
+  const actionLabel = getLocalizedPaperActionLabel(locale, action);
+
+  if (action === "HOLD") {
+    return actionLabel;
+  }
+
+  const suffix =
+    disposition === "DEFERRED_CONFIRMATION"
+      ? locale === "ko"
+        ? "확인 대기"
+        : "pending confirmation"
+      : disposition === "EXECUTED_AFTER_CONFIRMATION"
+        ? locale === "ko"
+          ? "확인 후 실행"
+          : "executed after confirmation"
+        : disposition === "IMMEDIATE"
+          ? locale === "ko"
+            ? "실행"
+            : "executed"
+          : locale === "ko"
+            ? "스킵"
+            : "skipped";
+
+  return `${actionLabel} (${suffix})`;
 }
 
 function renderCompactPositionLine(
@@ -322,7 +355,7 @@ function renderDecisionLine(
   ].join(" | ");
 
   return [
-    `${asset}: ${getLocalizedPaperActionLabel(locale, decision.action)} | ${getDispositionLabel(locale, meta.executionDisposition, decision.executionStatus)}`,
+    `${asset}: ${getLocalizedPaperActionLabel(locale, decision.action)} | ${getCompactDispositionLabel(locale, meta.executionDisposition, decision.executionStatus)}`,
     `${locale === "ko" ? "신호 강도" : "Signal quality"}: ${getQualityBucketLabel(locale, meta.signalQualityBucket)}`,
     detailLine,
     meta.weakeningStage !== "NONE"
@@ -333,6 +366,52 @@ function renderDecisionLine(
     `${locale === "ko" ? "기준가" : "Reference"}: ${decision.referencePrice > 0 ? formatKrw(locale, decision.referencePrice) : na(locale)}`,
     `${locale === "ko" ? "시각" : "At"}: ${formatCompactTimestampForLocale(locale, decision.createdAt)}`,
   ].filter((value): value is string => Boolean(value)).join("\n");
+}
+
+function renderDecisionLineCompact(
+  asset: SupportedAsset,
+  decision: StrategyDecisionRecord | null,
+  locale: SupportedLocale,
+): string {
+  if (!decision) {
+    return locale === "ko"
+      ? `${asset}: 아직 저장된 결정이 없습니다.`
+      : `${asset}: No persisted decision yet.`;
+  }
+
+  const meta = readDecisionMeta(decision.rationale);
+  const localizedReasons = decision.reasons.slice(0, 2).map((reason) => localizeDecisionText(locale, reason));
+  const localizedSummary = localizeDecisionText(locale, decision.summary);
+
+  return [
+    `${asset}: ${getLocalizedPaperActionLabel(locale, decision.action)} | ${getCompactDispositionLabel(locale, meta.executionDisposition, decision.executionStatus)}`,
+    meta.entryPath !== "NONE"
+      ? `${locale === "ko" ? "경로" : "Path"}: ${getEntryPathLabel(locale, meta.entryPath)}`
+      : null,
+    meta.weakeningStage !== "NONE"
+      ? `${locale === "ko" ? "약화 단계" : "Weakening"}: ${getWeakeningStageLabel(locale, meta.weakeningStage)}`
+      : null,
+    `${locale === "ko" ? "설명" : "Summary"}: ${localizedSummary}`,
+    `${locale === "ko" ? "사유" : "Reasons"}: ${(localizedReasons.join(" / ")) || na(locale)}`,
+    `${locale === "ko" ? "기준가" : "Reference"}: ${decision.referencePrice > 0 ? formatKrw(locale, decision.referencePrice) : na(locale)}`,
+    `${locale === "ko" ? "시각" : "At"}: ${formatCompactTimestampForLocale(locale, decision.createdAt)}`,
+  ].filter((value): value is string => Boolean(value)).join("\n");
+}
+
+function getCompactDispositionLabel(
+  locale: SupportedLocale,
+  disposition: DecisionExecutionDisposition,
+  executionStatus: StrategyDecisionExecutionStatus,
+): string {
+  if (locale === "ko") {
+    if (disposition === "DEFERRED_CONFIRMATION") return "확인 대기";
+    if (disposition === "EXECUTED_AFTER_CONFIRMATION") return "확인 후 실행";
+    return executionStatus === "EXECUTED" ? "실행" : "건너뜀";
+  }
+
+  if (disposition === "DEFERRED_CONFIRMATION") return "Pending confirmation";
+  if (disposition === "EXECUTED_AFTER_CONFIRMATION") return "Executed after confirmation";
+  return executionStatus === "EXECUTED" ? "Executed" : "Skipped";
 }
 
 function localizeDecisionText(locale: SupportedLocale, text: string): string {

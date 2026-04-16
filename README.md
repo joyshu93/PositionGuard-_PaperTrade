@@ -171,6 +171,7 @@ Important notes about settings semantics:
 - the bot does not live-sync exchange policy values from Upbit during runtime
 - fee rate and minimum trade value are explicit reference assumptions configured in code or env
 - minimum trade value default is currently aligned to the Upbit KRW minimum-order reference of `5,000 KRW`
+- the current default staged sizing is intentionally conservative, but not flat-footed: `entryAllocation=30%`, `addAllocation=18%`
 - slippage, staged sizing, and exposure limits are internal paper-trading assumptions, not exchange policy values
 - source labels in `/settings` indicate whether the active value comes from a deployment env override or from the code default
 
@@ -214,13 +215,10 @@ Cumulative stats are calculated from persisted trade history as follows:
 - localized action label
 - whether the action was immediate, deferred for confirmation, or executed after confirmation
 - entry path: `PULLBACK`, `RECLAIM`, or `BREAKOUT_HOLD`
-- trend alignment score
-- recovery quality score
-- breakdown pressure summary
 - summary
 - top reasons
-- signal quality bucket
 - reference price
+- decision timestamp
 
 If market data was unavailable and the hourly cycle skipped a decision, `/decision` should make that clear from the stored summary and execution status.
 
@@ -236,6 +234,7 @@ Hourly reporting behavior:
 
 - execution alerts are sent only when a simulated fill is executed
 - one hourly summary is sent after BTC and ETH are both processed
+- hourly summaries now show action with a compact parenthesized execution state for non-hold actions, so `ADD` pending confirmation does not look like an executed fill
 - hourly summary and execution alerts respect sleep mode
 - Telegram delivery now uses a small bounded retry before finally logging and giving up, so transient send failures are less likely to drop an alert
 - action labels are localized for both English and Korean output
@@ -253,7 +252,7 @@ The main refinements are:
 - soft re-entry caution: a recent exit slightly raises the threshold for a fresh `ENTRY`, but strong reclaim/recovery structure can still override it
 - exposure-based guardrails: additional bullish sizing is capped by per-asset and total-portfolio exposure limits
 - mid-range pullbacks now need better recovery quality before they count as constructive bullish candidates
-- recovery volume is now interpreted more conservatively so muted or still-forming spikes are less likely to lift a setup into action
+- recovery volume remains conservative, but slightly above-baseline completed recovery volume can now support a valid setup a little more readily than before
 - entry paths are now explicit so a bullish setup is inspectable as a pullback, reclaim, or breakout-hold path
 - add logic is stricter than entry logic: an existing position must still be healthy and aligned before staged adds are allowed
 - decision diagnostics now expose trend alignment, recovery quality, and breakdown pressure so operator review is less guessy

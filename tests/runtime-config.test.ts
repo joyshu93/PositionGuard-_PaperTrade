@@ -3,6 +3,7 @@ import {
   createRuntimeConfig,
   getRuntimeConfigReport,
 } from "../src/env.js";
+import { DEFAULT_PAPER_TRADING_SETTINGS } from "../src/paper/config.js";
 import { assert, assertEqual } from "./test-helpers.js";
 
 const validReport = getRuntimeConfigReport(
@@ -59,6 +60,11 @@ assertEqual(
   "Minimum trade value should fall back to the explicit Upbit KRW reference default.",
 );
 assertEqual(
+  runtimeConfig.paperTradingSettings.values.addAllocation,
+  DEFAULT_PAPER_TRADING_SETTINGS.addAllocation,
+  "Missing add-allocation overrides should fall back to the updated conservative default.",
+);
+assertEqual(
   runtimeConfig.paperTradingSettings.sourceByField.entryAllocation,
   "env",
   "Settings metadata should indicate when a field comes from an env override.",
@@ -72,6 +78,27 @@ assertEqual(
   runtimeConfig.paperTradingSettings.values.totalPortfolioMaxExposure,
   0.7,
   "Runtime config should resolve exposure-based guardrail overrides.",
+);
+
+const defaultSizingRuntimeConfig = createRuntimeConfig({
+  DB: {
+    prepare() {
+      throw new Error("not used");
+    },
+  } as unknown as D1Database,
+  TELEGRAM_BOT_TOKEN: "bot-token",
+  TELEGRAM_WEBHOOK_SECRET: "secret-token",
+});
+
+assertEqual(
+  defaultSizingRuntimeConfig.paperTradingSettings.values.entryAllocation,
+  DEFAULT_PAPER_TRADING_SETTINGS.entryAllocation,
+  "Missing entry-allocation overrides should fall back to the updated staged-entry default.",
+);
+assertEqual(
+  defaultSizingRuntimeConfig.paperTradingSettings.values.addAllocation,
+  DEFAULT_PAPER_TRADING_SETTINGS.addAllocation,
+  "Missing add-allocation overrides should fall back to the updated staged-add default.",
 );
 
 const invalidReport = getRuntimeConfigReport(

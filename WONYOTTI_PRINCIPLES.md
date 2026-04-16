@@ -21,6 +21,7 @@ The system should respect higher-timeframe structure before acting.
 ### 2. Survival First
 
 The engine should prefer capital preservation over activity. When structure is unclear, `HOLD` is acceptable.
+That conservatism does not require permanent cash paralysis: once structure is already approved, staged paper allocation may increase modestly without loosening invalidation or chase-buy filters.
 
 ### 3. Price / Levels / Structure Over Narrative
 
@@ -49,6 +50,7 @@ No leverage concepts, no liquidation framing, no derivatives language.
 ### 9. Simulated Execution Honesty
 
 All user-facing output must clearly state that fills are simulated paper fills. The bot must never imply real broker connectivity.
+Operator-facing messages should distinguish decision, execution, and hold state clearly enough that a deferred add never looks like an executed trade, and concise status wording should win over internal scoring jargon.
 
 ## Product Consequences
 

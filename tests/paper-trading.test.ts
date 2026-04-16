@@ -5,6 +5,7 @@ import {
   type PositionStructureAnalysis,
   type TimeframeStructure,
 } from "../src/decision/market-structure.js";
+import { DEFAULT_PAPER_TRADING_SETTINGS } from "../src/paper/config.js";
 import {
   applyPaperFill,
   buildEquitySnapshot,
@@ -48,7 +49,7 @@ const settings = {
   slippageRate: 0.0007,
   minimumTradeValueKrw: 15_000,
   entryAllocation: 0.3,
-  addAllocation: 0.2,
+  addAllocation: 0.18,
   reduceFraction: 0.4,
   perAssetMaxAllocation: 0.45,
   totalPortfolioMaxExposure: 0.75,
@@ -165,7 +166,7 @@ assert(
   "Paper status should explicitly say fills are simulated.",
 );
 assert(
-  renderPaperStatusMessage(performanceSnapshot, "en", "2026-04-06T00:05:00.000Z").includes("query-time public Upbit ticker prices"),
+  renderPaperStatusMessage(performanceSnapshot, "en", "2026-04-06T00:05:00.000Z").includes("query-time public Upbit tickers"),
   "/status should disclose that current prices prefer query-time ticker prices.",
 );
 assert(
@@ -211,14 +212,16 @@ assert(
 
 const hourlySummary = buildHourlySummaryMessage({
   btcAction: "ENTRY",
+  btcDisposition: "IMMEDIATE",
   ethAction: "HOLD",
+  ethDisposition: "SKIPPED",
   snapshot: performanceSnapshot,
   locale: "en",
 });
 assert(
-  hourlySummary.includes("BTC: Entry | ETH: Hold") &&
-    hourlySummary.includes("All values reflect internal simulated paper fills"),
-  "Hourly summary should include localized actions and simulated-fill wording.",
+  hourlySummary.includes("BTC: Entry (executed) | ETH: Hold") &&
+    hourlySummary.includes("All values reflect internal simulation."),
+  "Hourly summary should include localized actions, execution disposition, and simulated-fill wording.",
 );
 
 const settingsMessage = renderPaperSettingsMessage(
@@ -302,6 +305,24 @@ assertEqual(
   constructiveRecoveryAnalysis.volumeRecovery,
   true,
   "Recovery volume should still count when the latest completed candle actually expands above baseline.",
+);
+
+const baselineRecoveryAnalysis = analyzeMarketStructure(
+  createMonotonicMarketSnapshot({
+    tradePrice: 103,
+    tradeTimeUtc: "2026-04-07T02:00:00",
+    fetchedAt: "2026-04-07T02:00:00.000Z",
+    oneHourCloses: [100, 100.5, 101, 101.5, 102, 102.2, 102.4, 102.6, 102.8, 103, 103.1, 103.2, 103.3, 103.4, 103.5, 103.6, 103.7, 103.8, 103.9, 104, 104.05],
+    oneHourVolumes: [100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 103],
+    fourHourCloses: [95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 104.2, 104.4, 104.6, 104.8, 105, 105.1, 105.2, 105.3, 105.4, 105.5, 105.6],
+    fourHourVolumes: [100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 98],
+    oneDayCloses: [90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110],
+  }),
+);
+assertEqual(
+  baselineRecoveryAnalysis.volumeRecovery,
+  true,
+  "Slightly above-baseline completed recovery volume should now support constructive recovery more readily.",
 );
 
 const hysteresisEntryHold = buildPaperTradeDecisionFromAnalysis(
@@ -704,7 +725,7 @@ const reclaimAddImmediate = buildPaperTradeDecisionFromAnalysis(
     volumeRecovery: true,
     entryPath: "RECLAIM",
     trendAlignmentScore: 4,
-    recoveryQualityScore: 3,
+    recoveryQualityScore: 4,
   }),
 );
 const breakoutAddDeferred = buildPaperTradeDecisionFromAnalysis(
@@ -843,6 +864,59 @@ assert(
   "Strong reclaim/recovery structure should still overcome the soft re-entry penalty.",
 );
 
+const defaultSizingStrongEntry = buildPaperTradeDecisionFromAnalysis(
+  createContext({
+    positionQuantity: 0,
+    settings: {
+      ...settings,
+      entryAllocation: DEFAULT_PAPER_TRADING_SETTINGS.entryAllocation,
+      addAllocation: DEFAULT_PAPER_TRADING_SETTINGS.addAllocation,
+    },
+  }),
+  createAnalysis({
+    regime: "BULL_TREND",
+    pullbackZone: true,
+    reclaimStructure: true,
+    breakoutHoldStructure: true,
+    volumeRecovery: true,
+    macdImproving: true,
+    entryPath: "RECLAIM",
+    trendAlignmentScore: 5,
+    recoveryQualityScore: 4,
+  }),
+);
+assertEqual(
+  defaultSizingStrongEntry.targetCashToUse,
+  300_000,
+  "The updated default entry allocation should stage 30% of cash when a strong immediate entry clears all caps.",
+);
+
+const defaultSizingStrongAdd = buildPaperTradeDecisionFromAnalysis(
+  createContext({
+    positionQuantity: 1,
+    settings: {
+      ...settings,
+      entryAllocation: DEFAULT_PAPER_TRADING_SETTINGS.entryAllocation,
+      addAllocation: DEFAULT_PAPER_TRADING_SETTINGS.addAllocation,
+    },
+  }),
+  createAnalysis({
+    regime: "RECLAIM_ATTEMPT",
+    pullbackZone: false,
+    reclaimStructure: true,
+    breakoutHoldStructure: false,
+    volumeRecovery: true,
+    entryPath: "RECLAIM",
+    trendAlignmentScore: 4,
+    recoveryQualityScore: 3,
+  }),
+);
+assertEqual(
+  defaultSizingStrongAdd.targetCashToUse,
+  129_600,
+  "The updated default add allocation should still keep reclaim adds modest after the stricter add multiplier is applied.",
+);
+
 let thresholdSkipSavedMark: number | null = null;
 const thresholdSkipDecision = buildPaperTradeDecisionFromAnalysis(
   createContext({ positionQuantity: 0.001 }),
@@ -960,11 +1034,11 @@ const decisionMessage = renderPaperDecisionMessage(
   "en",
 );
 assert(
-  decisionMessage.includes("BTC: Entry | Deferred") &&
-    decisionMessage.includes("Signal quality: Borderline") &&
+  decisionMessage.includes("BTC: Entry | Pending confirmation") &&
     decisionMessage.includes("Path: Pullback") &&
-    decisionMessage.includes("ETH: Add | Immediate"),
-  "/decision should show execution status, signal quality, and the main entry-path diagnostics.",
+    decisionMessage.includes("Summary: BTC entry setup is deferred pending one additional hourly confirmation.") &&
+    decisionMessage.includes("ETH: Add | Executed"),
+  "/decision should show concise execution status, path, and human-readable explanation.",
 );
 
 const decisionMessageKo = renderPaperDecisionMessage(
@@ -1008,6 +1082,10 @@ assert(
     && decisionMessageKo.includes("BTC 진입 셋업은 한 시간 추가 확인을 위해 보류되었습니다.")
     && decisionMessageKo.includes("사유: 강세 구조는 유효하지만 경계 구간이라 한 시간 추가 확인이 필요합니다. / 건설적인 눌림 구조가 형성돼 있습니다."),
   "/decision should localize summary and reasons into Korean when locale is ko.",
+);
+assert(
+  !decisionMessageKo.includes("?좏샇 媛뺣룄"),
+  "/decision should drop internal score wording from the default Korean user view.",
 );
 
 let aggregatePersistCalls = 0;
@@ -1402,6 +1480,7 @@ function createContext(input?: {
   latestDecision?: PaperTradingContext["latestDecision"];
   recentExitHours?: number | null;
   recentExitRealizedPnl?: number | null;
+  settings?: PaperTradingContext["settings"];
 }): PaperTradingContext {
   const quantity = input?.positionQuantity ?? 0;
   return {
@@ -1467,7 +1546,7 @@ function createContext(input?: {
       },
     },
     generatedAt: "2026-04-06T00:00:00.000Z",
-    settings,
+    settings: input?.settings ?? settings,
   };
 }
 

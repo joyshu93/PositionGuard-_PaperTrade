@@ -174,7 +174,11 @@ export async function runUserHourlyCycle(params: {
       Number(userState.user.telegramChatId),
       buildHourlySummaryMessage({
         btcAction: assetResults.find((result) => result.asset === "BTC")?.execution.action ?? "HOLD",
+        btcDisposition:
+          assetResults.find((result) => result.asset === "BTC")?.execution.executionDisposition ?? "SKIPPED",
         ethAction: assetResults.find((result) => result.asset === "ETH")?.execution.action ?? "HOLD",
+        ethDisposition:
+          assetResults.find((result) => result.asset === "ETH")?.execution.executionDisposition ?? "SKIPPED",
         snapshot: performanceSnapshot,
         locale,
       }),
