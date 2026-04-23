@@ -69,7 +69,7 @@ export function buildPaperTradeDecisionFromAnalysis(
     bullishEvidenceCount: bullishEvidence,
     weaknessEvidenceCount: weaknessEvidence,
   };
-  const exposureGuardrails = buildExposureGuardrails(context);
+  const exposureGuardrails = buildExposureGuardrails(context, analysis);
 
   if (
     analysis.invalidationState === "BROKEN" ||
@@ -452,7 +452,8 @@ function bullishDecision(input: {
     exposureGuardrails,
     extraReasons,
   } = input;
-  const baseCash = getDefaultTargetCash(action, context.account.cashBalance, context.settings);
+  const budgetBase = Math.max(context.portfolio.totalEquity, context.account.cashBalance);
+  const baseCash = getDefaultTargetCash(action, budgetBase, context.settings);
   const cappedCash = Math.max(
     0,
     Math.min(
@@ -525,17 +526,43 @@ function holdDecision(
   };
 }
 
-function buildExposureGuardrails(context: PaperTradingContext): PaperTradingDecision["exposureGuardrails"] {
+function buildExposureGuardrails(
+  context: PaperTradingContext,
+  analysis: PositionStructureAnalysis,
+): PaperTradingDecision["exposureGuardrails"] {
   const totalEquity = Math.max(context.portfolio.totalEquity, context.account.cashBalance);
-  const perAssetLimitValue = totalEquity * context.settings.perAssetMaxAllocation;
+  const effectivePerAssetMaxAllocation = getEffectivePerAssetMaxAllocation(context.settings, analysis);
+  const perAssetLimitValue = totalEquity * effectivePerAssetMaxAllocation;
   const totalExposureLimitValue = totalEquity * context.settings.totalPortfolioMaxExposure;
 
   return {
-    perAssetMaxAllocation: context.settings.perAssetMaxAllocation,
+    perAssetMaxAllocation: effectivePerAssetMaxAllocation,
     totalPortfolioMaxExposure: context.settings.totalPortfolioMaxExposure,
     remainingAssetCapacity: Math.max(0, perAssetLimitValue - context.portfolio.assetMarketValue),
     remainingPortfolioCapacity: Math.max(0, totalExposureLimitValue - context.portfolio.totalExposureValue),
   };
+}
+
+function getEffectivePerAssetMaxAllocation(
+  settings: PaperTradingContext["settings"],
+  analysis: PositionStructureAnalysis,
+): number {
+  if (
+    analysis.invalidationState === "CLEAR"
+    && !analysis.upperRangeChase
+    && analysis.breakdownPressureScore <= 1
+    && analysis.trendAlignmentScore >= 4
+    && analysis.recoveryQualityScore >= 4
+    && (
+      analysis.regime === "BULL_TREND"
+      || analysis.regime === "PULLBACK_IN_UPTREND"
+      || analysis.entryPath === "RECLAIM"
+    )
+  ) {
+    return Math.max(settings.perAssetMaxAllocation, settings.strongTrendPerAssetMaxAllocation);
+  }
+
+  return settings.perAssetMaxAllocation;
 }
 
 function hasBullishRiskCapacity(

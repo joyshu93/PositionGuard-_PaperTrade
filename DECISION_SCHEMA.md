@@ -99,6 +99,7 @@ The current rule set uses inspectable structure inputs only:
 - bearish momentum expansion
 - conservative but slightly softened recovery-volume interpretation, so slightly above-baseline completed recovery volume can support valid structure without becoming a hard blocker
 - slightly less cash-conservative staged entry sizing than the earliest paper-trading slice, while still keeping explicit exposure caps
+- current total equity as the primary buy-budget base instead of shrinking every staged buy only from remaining cash
 - trend alignment score
 - recovery quality score
 - breakdown pressure score
@@ -148,8 +149,10 @@ Execution remains internal only.
 - `HOLD` produces no trade row
 - fee and slippage assumptions must stay explicit in code constants
 - fee, slippage, sizing, and minimum trade assumptions must stay explicit in the paper-trading configuration layer
-- exposure guardrails must stay explicit via per-asset max allocation and total portfolio max exposure
-- the current safe-first default sizing is `30%` staged entry allocation and `18%` staged add allocation before path- and quality-based multipliers are applied
+- exposure guardrails must stay explicit via a base per-asset max allocation, an optional strong-trend concentration backstop, and total portfolio max exposure
+- the current safe-first default sizing is `30%` staged entry budget and `18%` staged add budget before path- and quality-based multipliers are applied
+- those staged buy budgets are calculated from current total equity, then clipped by available cash, effective per-asset concentration capacity, and total portfolio exposure capacity
+- the default base per-asset concentration cap is `45%`, and clearly strong trend / reclaim structure may use a `60%` per-asset concentration backstop without loosening the total portfolio cap
 - borderline bullish confirmation is allowed, but invalidation-based exits must never be delayed
 - `ADD` must remain stricter than `ENTRY`; an existing hold has to stay healthy and aligned before staged adds are allowed
 - reclaim continuation may clear faster than a raw pullback when recovery quality is already strong

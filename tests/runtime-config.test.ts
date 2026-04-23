@@ -75,6 +75,11 @@ assertEqual(
   "Settings metadata should indicate when a field remains on the default fallback.",
 );
 assertEqual(
+  runtimeConfig.paperTradingSettings.values.strongTrendPerAssetMaxAllocation,
+  DEFAULT_PAPER_TRADING_SETTINGS.strongTrendPerAssetMaxAllocation,
+  "Strong-trend per-asset allocation should fall back to the explicit default when not overridden.",
+);
+assertEqual(
   runtimeConfig.paperTradingSettings.values.totalPortfolioMaxExposure,
   0.7,
   "Runtime config should resolve exposure-based guardrail overrides.",
@@ -99,6 +104,11 @@ assertEqual(
   defaultSizingRuntimeConfig.paperTradingSettings.values.addAllocation,
   DEFAULT_PAPER_TRADING_SETTINGS.addAllocation,
   "Missing add-allocation overrides should fall back to the updated staged-add default.",
+);
+assertEqual(
+  defaultSizingRuntimeConfig.paperTradingSettings.values.strongTrendPerAssetMaxAllocation,
+  DEFAULT_PAPER_TRADING_SETTINGS.strongTrendPerAssetMaxAllocation,
+  "Missing strong-trend cap overrides should fall back to the documented concentration backstop default.",
 );
 
 const invalidReport = getRuntimeConfigReport(

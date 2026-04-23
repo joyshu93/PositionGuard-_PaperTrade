@@ -22,6 +22,7 @@ The system should respect higher-timeframe structure before acting.
 
 The engine should prefer capital preservation over activity. When structure is unclear, `HOLD` is acceptable.
 That conservatism does not require permanent cash paralysis: once structure is already approved, staged paper allocation may increase modestly without loosening invalidation or chase-buy filters.
+Reserve policy should be explained primarily through cash left uninvested and total exposure limits, not through a simplistic “two assets therefore split in half” framing.
 
 ### 3. Price / Levels / Structure Over Narrative
 
@@ -42,6 +43,7 @@ Losses must not trigger oversized or emotional responses. The bot should never a
 ### 7. Rotational Spot Management
 
 The system may stage entry, add, reduce, and exit decisions, but always in spot-only paper-trading terms.
+Those stages should be budget-first: total equity and total exposure are the primary policy anchors, while per-asset caps act as concentration backstops rather than equal-slot budgeting rules.
 
 ### 8. Spot-First Thinking
 

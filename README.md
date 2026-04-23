@@ -155,10 +155,11 @@ Active settings are visible in `/settings`.
 - internal simulation and strategy settings
   - initial paper cash
   - slippage rate
-  - entry allocation
-  - add allocation
+  - entry budget ratio
+  - add budget ratio
   - reduce fraction
-  - per-asset max allocation
+  - base per-asset max allocation
+  - strong-trend per-asset max allocation
   - total portfolio max exposure
 
 Current source precedence:
@@ -172,6 +173,8 @@ Important notes about settings semantics:
 - fee rate and minimum trade value are explicit reference assumptions configured in code or env
 - minimum trade value default is currently aligned to the Upbit KRW minimum-order reference of `5,000 KRW`
 - the current default staged sizing is intentionally conservative, but not flat-footed: `entryAllocation=30%`, `addAllocation=18%`
+- buy budgets are derived from current total equity first, then clipped by available cash, the active per-asset concentration cap, and the total portfolio exposure cap
+- the base per-asset concentration cap stays at `45%`, while clearly strong trend / reclaim structure may use a higher `60%` concentration backstop before the total portfolio cap still limits overall exposure
 - slippage, staged sizing, and exposure limits are internal paper-trading assumptions, not exchange policy values
 - source labels in `/settings` indicate whether the active value comes from a deployment env override or from the code default
 
@@ -249,8 +252,10 @@ The main refinements are:
 - confirmation for borderline bullish setups: weaker but still valid `ENTRY` and `ADD` setups are deferred until the immediately previous hourly cycle showed the same deferred setup signature again (`action + entryPath + signal-quality bucket`)
 - immediate invalidation exits: invalidation-based `EXIT` remains immediate and is never delayed by confirmation logic
 - graduated sizing: stronger constructive structure uses more of the staged allocation, while borderline confirmed structure uses less
+- budget-first bullish sizing: the staged buy budget now starts from total equity instead of only remaining cash, so repeated valid adds do not mechanically decay just because earlier buys already used some cash
 - soft re-entry caution: a recent exit slightly raises the threshold for a fresh `ENTRY`, but strong reclaim/recovery structure can still override it
 - exposure-based guardrails: additional bullish sizing is capped by per-asset and total-portfolio exposure limits
+- concentration backstop refinement: the default per-asset cap stays conservative, but clearly strong trend / reclaim structure can use a higher concentration cap so one strong asset does not get stuck at the same ceiling as a marginal setup
 - mid-range pullbacks now need better recovery quality before they count as constructive bullish candidates
 - recovery volume remains conservative, but slightly above-baseline completed recovery volume can now support a valid setup a little more readily than before
 - entry paths are now explicit so a bullish setup is inspectable as a pullback, reclaim, or breakout-hold path

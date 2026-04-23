@@ -1,4 +1,4 @@
-import type {
+﻿import type {
   DecisionExecutionDisposition,
   EntryPath,
   PaperDailySummary,
@@ -153,12 +153,13 @@ export function renderPaperSettingsMessage(
       "내부 시뮬레이션 및 전략 설정",
       `초기 페이퍼 현금: ${formatKrw(locale, settings.values.initialPaperCashKrw)} (${fieldSourceLabel(locale, settings, "initialPaperCashKrw")})`,
       `슬리피지율: ${formatDecimal(locale, settings.values.slippageRate)} (${fieldSourceLabel(locale, settings, "slippageRate")})`,
-      `진입 배분: ${formatPercent(locale, settings.values.entryAllocation * 100)} (${fieldSourceLabel(locale, settings, "entryAllocation")})`,
-      `추가매수 배분: ${formatPercent(locale, settings.values.addAllocation * 100)} (${fieldSourceLabel(locale, settings, "addAllocation")})`,
+      `진입 예산 비율: ${formatPercent(locale, settings.values.entryAllocation * 100)} (${fieldSourceLabel(locale, settings, "entryAllocation")})`,
+      `추가 예산 비율: ${formatPercent(locale, settings.values.addAllocation * 100)} (${fieldSourceLabel(locale, settings, "addAllocation")})`,
       `축소 비중: ${formatPercent(locale, settings.values.reduceFraction * 100)} (${fieldSourceLabel(locale, settings, "reduceFraction")})`,
-      `자산별 최대 비중: ${formatPercent(locale, settings.values.perAssetMaxAllocation * 100)} (${fieldSourceLabel(locale, settings, "perAssetMaxAllocation")})`,
+      `기본 자산별 상한: ${formatPercent(locale, settings.values.perAssetMaxAllocation * 100)} (${fieldSourceLabel(locale, settings, "perAssetMaxAllocation")})`,
+      `강한 추세 자산 상한: ${formatPercent(locale, settings.values.strongTrendPerAssetMaxAllocation * 100)} (${fieldSourceLabel(locale, settings, "strongTrendPerAssetMaxAllocation")})`,
       `총 최대 익스포저: ${formatPercent(locale, settings.values.totalPortfolioMaxExposure * 100)} (${fieldSourceLabel(locale, settings, "totalPortfolioMaxExposure")})`,
-      "참고: 슬리피지, 배분, 익스포저 값은 거래소 정책이 아니라 내부 페이퍼트레이딩 가정입니다.",
+      "참고: 매수 예산은 현재 총자산을 먼저 기준으로 계산한 뒤, 현금·자산별 상한·총 익스포저 한도로 다시 제한합니다.",
       "",
       `출처 요약: ${sourceSummary}`,
     ].join("\n");
@@ -176,12 +177,13 @@ export function renderPaperSettingsMessage(
     "Internal simulation and strategy settings",
     `Initial paper cash: ${formatKrw(locale, settings.values.initialPaperCashKrw)} (${fieldSourceLabel(locale, settings, "initialPaperCashKrw")})`,
     `Slippage rate: ${formatDecimal(locale, settings.values.slippageRate)} (${fieldSourceLabel(locale, settings, "slippageRate")})`,
-    `Entry allocation: ${formatPercent(locale, settings.values.entryAllocation * 100)} (${fieldSourceLabel(locale, settings, "entryAllocation")})`,
-    `Add allocation: ${formatPercent(locale, settings.values.addAllocation * 100)} (${fieldSourceLabel(locale, settings, "addAllocation")})`,
+    `Entry budget ratio: ${formatPercent(locale, settings.values.entryAllocation * 100)} (${fieldSourceLabel(locale, settings, "entryAllocation")})`,
+    `Add budget ratio: ${formatPercent(locale, settings.values.addAllocation * 100)} (${fieldSourceLabel(locale, settings, "addAllocation")})`,
     `Reduce fraction: ${formatPercent(locale, settings.values.reduceFraction * 100)} (${fieldSourceLabel(locale, settings, "reduceFraction")})`,
-    `Per-asset max allocation: ${formatPercent(locale, settings.values.perAssetMaxAllocation * 100)} (${fieldSourceLabel(locale, settings, "perAssetMaxAllocation")})`,
+    `Base per-asset max allocation: ${formatPercent(locale, settings.values.perAssetMaxAllocation * 100)} (${fieldSourceLabel(locale, settings, "perAssetMaxAllocation")})`,
+    `Strong-trend per-asset max allocation: ${formatPercent(locale, settings.values.strongTrendPerAssetMaxAllocation * 100)} (${fieldSourceLabel(locale, settings, "strongTrendPerAssetMaxAllocation")})`,
     `Total portfolio max exposure: ${formatPercent(locale, settings.values.totalPortfolioMaxExposure * 100)} (${fieldSourceLabel(locale, settings, "totalPortfolioMaxExposure")})`,
-    "Note: Slippage, staged sizing, and exposure values are internal paper-trading assumptions, not exchange policy values.",
+    "Note: Buy budgets are derived from current total equity, then clipped again by available cash, per-asset concentration guardrails, and total portfolio exposure.",
     "",
     `Source summary: ${sourceSummary}`,
   ].join("\n");
@@ -356,7 +358,6 @@ function renderDecisionLine(
 
   return [
     `${asset}: ${getLocalizedPaperActionLabel(locale, decision.action)} | ${getCompactDispositionLabel(locale, meta.executionDisposition, decision.executionStatus)}`,
-    `${locale === "ko" ? "신호 강도" : "Signal quality"}: ${getQualityBucketLabel(locale, meta.signalQualityBucket)}`,
     detailLine,
     meta.weakeningStage !== "NONE"
       ? `${locale === "ko" ? "약화 단계" : "Weakening"}: ${getWeakeningStageLabel(locale, meta.weakeningStage)}`

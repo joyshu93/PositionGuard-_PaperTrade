@@ -7,6 +7,7 @@ export interface PaperTradingSettingEnv {
   PAPER_ADD_ALLOCATION?: string;
   PAPER_REDUCE_FRACTION?: string;
   PAPER_PER_ASSET_MAX_ALLOCATION?: string;
+  PAPER_STRONG_TREND_PER_ASSET_MAX_ALLOCATION?: string;
   PAPER_TOTAL_PORTFOLIO_MAX_EXPOSURE?: string;
 }
 
@@ -19,6 +20,7 @@ export interface PaperTradingSettings {
   addAllocation: number;
   reduceFraction: number;
   perAssetMaxAllocation: number;
+  strongTrendPerAssetMaxAllocation: number;
   totalPortfolioMaxExposure: number;
 }
 
@@ -40,6 +42,7 @@ export const DEFAULT_PAPER_TRADING_SETTINGS: PaperTradingSettings = {
   addAllocation: 0.18,
   reduceFraction: 0.33,
   perAssetMaxAllocation: 0.45,
+  strongTrendPerAssetMaxAllocation: 0.60,
   totalPortfolioMaxExposure: 0.75,
 };
 
@@ -85,6 +88,11 @@ export function resolvePaperTradingSettings(
     perAssetMaxAllocation: resolveNumericSetting(
       env?.PAPER_PER_ASSET_MAX_ALLOCATION,
       DEFAULT_PAPER_TRADING_SETTINGS.perAssetMaxAllocation,
+      { minExclusive: 0, maxInclusive: 1 },
+    ),
+    strongTrendPerAssetMaxAllocation: resolveNumericSetting(
+      env?.PAPER_STRONG_TREND_PER_ASSET_MAX_ALLOCATION,
+      DEFAULT_PAPER_TRADING_SETTINGS.strongTrendPerAssetMaxAllocation,
       { minExclusive: 0, maxInclusive: 1 },
     ),
     totalPortfolioMaxExposure: resolveNumericSetting(
@@ -150,6 +158,13 @@ export function resolvePaperTradingSettings(
         !hasText(env?.PAPER_PER_ASSET_MAX_ALLOCATION)
           ? "default"
           : hasValidNumber(env?.PAPER_PER_ASSET_MAX_ALLOCATION, { minExclusive: 0, maxInclusive: 1 })
+            ? "env"
+            : "default",
+      strongTrendPerAssetMaxAllocation:
+        values.strongTrendPerAssetMaxAllocation === DEFAULT_PAPER_TRADING_SETTINGS.strongTrendPerAssetMaxAllocation &&
+        !hasText(env?.PAPER_STRONG_TREND_PER_ASSET_MAX_ALLOCATION)
+          ? "default"
+          : hasValidNumber(env?.PAPER_STRONG_TREND_PER_ASSET_MAX_ALLOCATION, { minExclusive: 0, maxInclusive: 1 })
             ? "env"
             : "default",
       totalPortfolioMaxExposure:

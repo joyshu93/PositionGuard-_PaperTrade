@@ -52,6 +52,7 @@ const settings = {
   addAllocation: 0.18,
   reduceFraction: 0.4,
   perAssetMaxAllocation: 0.45,
+  strongTrendPerAssetMaxAllocation: 0.6,
   totalPortfolioMaxExposure: 0.75,
 } as const;
 
@@ -237,6 +238,7 @@ const settingsMessage = renderPaperSettingsMessage(
       addAllocation: "default",
       reduceFraction: "env",
       perAssetMaxAllocation: "default",
+      strongTrendPerAssetMaxAllocation: "default",
       totalPortfolioMaxExposure: "env",
     },
   },
@@ -245,7 +247,7 @@ const settingsMessage = renderPaperSettingsMessage(
 assert(
   settingsMessage.includes("Exchange-referenced assumptions") &&
     settingsMessage.includes("Minimum trade value: 15,000 KRW") &&
-    settingsMessage.includes("internal paper-trading assumptions"),
+    settingsMessage.includes("current total equity"),
   "/settings should distinguish exchange-referenced assumptions from internal simulation settings.",
 );
 
@@ -887,8 +889,8 @@ const defaultSizingStrongEntry = buildPaperTradeDecisionFromAnalysis(
 );
 assertEqual(
   defaultSizingStrongEntry.targetCashToUse,
-  300_000,
-  "The updated default entry allocation should stage 30% of cash when a strong immediate entry clears all caps.",
+  360_000,
+  "Strong entry sizing should now budget from total equity rather than shrinking against remaining cash only.",
 );
 
 const defaultSizingStrongAdd = buildPaperTradeDecisionFromAnalysis(
@@ -913,8 +915,39 @@ const defaultSizingStrongAdd = buildPaperTradeDecisionFromAnalysis(
 );
 assertEqual(
   defaultSizingStrongAdd.targetCashToUse,
-  129_600,
-  "The updated default add allocation should still keep reclaim adds modest after the stricter add multiplier is applied.",
+  155_520,
+  "Strong reclaim adds should now budget from total equity before cash and exposure caps clip the final staged size.",
+);
+
+const strongTrendCapContext = createContext({ positionQuantity: 1 });
+strongTrendCapContext.portfolio = {
+  totalEquity: 1_000_000,
+  assetMarketValue: 440_000,
+  totalExposureValue: 440_000,
+  assetExposureRatio: 0.44,
+  totalExposureRatio: 0.44,
+};
+const strongTrendCapDecision = buildPaperTradeDecisionFromAnalysis(
+  strongTrendCapContext,
+  createAnalysis({
+    regime: "BULL_TREND",
+    pullbackZone: false,
+    reclaimStructure: true,
+    breakoutHoldStructure: false,
+    volumeRecovery: true,
+    entryPath: "RECLAIM",
+    trendAlignmentScore: 4,
+    recoveryQualityScore: 4,
+  }),
+);
+assertEqual(
+  strongTrendCapDecision.exposureGuardrails.perAssetMaxAllocation,
+  0.6,
+  "Strong reclaim/trend structure should unlock the higher concentration backstop instead of forcing the base per-asset cap.",
+);
+assert(
+  strongTrendCapDecision.targetCashToUse > 10_000,
+  "Strong-trend concentration support should leave meaningful add capacity above the old 45% cap edge case.",
 );
 
 let thresholdSkipSavedMark: number | null = null;
